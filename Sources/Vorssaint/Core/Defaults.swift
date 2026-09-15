@@ -47,6 +47,9 @@ enum DefaultsKey {
     static let smoothScrollEnabled = "smoothScrollEnabled"
     static let smoothScrollStep = "smoothScrollStep"      // pixels per wheel tick
     static let mouseAccelerationDisabled = "mouseAccelerationDisabled" // sets HIDMouseAcceleration to -1 for mice
+    static let mousePointerCustomized = "mousePointerCustomized"
+    static let mousePointerAcceleration = "mousePointerAcceleration" // 0...40 HID acceleration/tracking value
+    static let mousePointerSpeed = "mousePointerSpeed" // 0...1 software pointer speed
     static let smoothScrollResponse = "smoothScrollResponse" // 0...100, higher follows the wheel sooner
     static let mouseNavigationEnabled = "mouseNavigationEnabled" // side buttons trigger Back and Forward
     static let mouseButtonShortcutsEnabled = "mouseButtonShortcutsEnabled" // extra buttons press a key combination (issue #282)
@@ -942,6 +945,9 @@ enum Defaults {
         DefaultsKey.smoothScrollEnabled: false,
         DefaultsKey.smoothScrollStep: 40,
         DefaultsKey.mouseAccelerationDisabled: false,
+        DefaultsKey.mousePointerCustomized: false,
+        DefaultsKey.mousePointerAcceleration: MouseAccelerationSupport.defaultAcceleration,
+        DefaultsKey.mousePointerSpeed: MouseAccelerationSupport.defaultSpeed,
         DefaultsKey.smoothScrollResponse: SmoothScrollSupport.defaultResponse,
         DefaultsKey.mouseNavigationEnabled: false,
         DefaultsKey.mouseButtonShortcutsEnabled: false,

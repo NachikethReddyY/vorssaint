@@ -3834,8 +3834,13 @@ struct MetricsTests {
         expect(registeredDefaults[DefaultsKey.mouseNavigationEnabled] as? Bool == false,
                "mouse side-button navigation is opt-in")
         expect(registeredDefaults[DefaultsKey.mouseAccelerationDisabled] as? Bool == false
+                && registeredDefaults[DefaultsKey.mousePointerCustomized] as? Bool == false
+                && registeredDefaults[DefaultsKey.mousePointerAcceleration] as? Double
+                    == MouseAccelerationSupport.defaultAcceleration
+                && registeredDefaults[DefaultsKey.mousePointerSpeed] as? Double
+                    == MouseAccelerationSupport.defaultSpeed
                 && registeredDefaults[DefaultsKey.panelControlMouseAcceleration] as? Bool == true,
-               "mouse acceleration control is opt-in and visible in the panel when installed")
+               "mouse pointer control starts at a no-change default and remains visible when installed")
         expect(registeredDefaults[DefaultsKey.mouseClickDebounceEnabled] as? Bool == false,
                "mouse click debounce is opt-in")
         expect(registeredDefaults[DefaultsKey.mouseClickDebounceWindowMs] as? Int
@@ -14994,9 +14999,21 @@ struct MetricsTests {
             original: MouseAccelerationStoredValue(rawValue: 45_056, isBoolean: false)
         )
         var mouseJournal = MouseAccelerationRecoveryJournal(bootTime: 7, entries: [])
+        let mouseResolutionRecovery = MouseAccelerationRecoveryEntry(
+            registryID: 42,
+            identity: mouseIdentity,
+            key: MouseAccelerationSupport.pointerResolutionKey,
+            original: MouseAccelerationStoredValue(rawValue: 26_214_400, isBoolean: false)
+        )
         mouseJournal.upsert(mouseRecovery)
-        expect(mouseJournal.entry(registryID: 42, identity: mouseIdentity) == mouseRecovery,
-               "mouse acceleration keeps one exact restorable value per live service")
+        mouseJournal.upsert(mouseResolutionRecovery)
+        expect(mouseJournal.entry(registryID: 42,
+                                  identity: mouseIdentity,
+                                  key: mouseRecovery.key) == mouseRecovery
+                && mouseJournal.entry(registryID: 42,
+                                      identity: mouseIdentity,
+                                      key: mouseResolutionRecovery.key) == mouseResolutionRecovery,
+               "mouse pointer control keeps every restorable property for one live service")
         let reusedRegistryIdentity = MouseAccelerationDeviceIdentity(
             vendorID: 9,
             productID: 9,
@@ -15005,16 +15022,23 @@ struct MetricsTests {
             physicalUniqueID: nil,
             serialNumber: nil
         )
-        expect(mouseJournal.entry(registryID: 42, identity: reusedRegistryIdentity) == nil,
+        expect(mouseJournal.entry(registryID: 42,
+                                  identity: reusedRegistryIdentity,
+                                  key: mouseRecovery.key) == nil,
                "a reused registry id can never receive another mouse's saved value")
         expect(mouseJournal.entriesToRestore(preserving: [42: mouseIdentity]).isEmpty
-                && mouseJournal.entry(registryID: 42, identity: mouseIdentity) == mouseRecovery,
+                && mouseJournal.entry(registryID: 42,
+                                      identity: mouseIdentity,
+                                      key: mouseRecovery.key) == mouseRecovery,
                "hotplug retries preserve a connected mouse's original value without restoring acceleration between attempts")
-        expect(mouseJournal.entriesToRestore(preserving: [43: mouseIdentity]) == [mouseRecovery],
+        expect(mouseJournal.entriesToRestore(preserving: [43: mouseIdentity])
+                == [mouseRecovery, mouseResolutionRecovery],
                "a reconnected mouse with a new registry id still needs recovery before recapture")
-        expect(mouseJournal.entriesToRestore(preserving: [42: reusedRegistryIdentity]) == [mouseRecovery],
+        expect(mouseJournal.entriesToRestore(preserving: [42: reusedRegistryIdentity])
+                == [mouseRecovery, mouseResolutionRecovery],
                "an unrelated mouse reusing a registry id cannot hide a pending recovery")
-        expect(mouseJournal.entriesToRestore(preserving: [:]) == [mouseRecovery],
+        expect(mouseJournal.entriesToRestore(preserving: [:])
+                == [mouseRecovery, mouseResolutionRecovery],
                "stopping acceleration control still restores every saved entry")
 
         var mouseReapplication = MouseAccelerationReapplySchedule()
@@ -15045,7 +15069,15 @@ struct MetricsTests {
             }
             if lateMouseValue != nil {
                 lateMouseValue = MouseAccelerationSupport.targetValue(
-                    for: mouseRecovery.key, originalIsBoolean: mouseRecovery.original.isBoolean)
+                    for: mouseRecovery.key,
+                    original: mouseRecovery.original,
+                    preferences: MousePointerPreferences(
+                        disablesAcceleration: true,
+                        acceleration: MouseAccelerationSupport.defaultAcceleration,
+                        speed: MouseAccelerationSupport.defaultSpeed
+                    ),
+                    supportsLinearScaling: false
+                )
             }
         }
         expect(lateMouseReset && lateMouseValue?.rawValue == -1,
@@ -15078,17 +15110,55 @@ struct MetricsTests {
                "an anonymous device can never inherit another registry id's saved value")
         expect(MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.linearScalingKey)
                 && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.mouseAccelerationKey)
+                && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.pointerResolutionKey)
                 && !MouseAccelerationSupport.isRestorableKey("UserKeyMapping"),
-               "mouse acceleration recovery accepts only its own HID properties")
+               "mouse pointer recovery accepts only its own HID properties")
+        expect(abs(MouseAccelerationSupport.pointerResolution(forSpeed: 0) - 1_200) < 0.0001
+                && abs(MouseAccelerationSupport.pointerResolution(forSpeed: 1) - 40) < 0.0001
+                && abs(MouseAccelerationSupport.pointerSpeed(forResolution: 40) - 1) < 0.0001
+                && abs(MouseAccelerationSupport.pointerSpeed(forResolution: 1_200)) < 0.0001,
+               "pointer speed maps the UI range onto LinearMouse's practical resolution range")
+        let pointerSpeedRoundTrip = 0.3793
+        expect(abs(MouseAccelerationSupport.pointerSpeed(forResolution:
+                    MouseAccelerationSupport.pointerResolution(forSpeed: pointerSpeedRoundTrip))
+                    - pointerSpeedRoundTrip) < 0.0001,
+               "pointer speed and HID resolution conversions round trip")
+        let pointerPreferences = MousePointerPreferences(
+            disablesAcceleration: false,
+            acceleration: 1.25,
+            speed: pointerSpeedRoundTrip
+        )
         expect(MouseAccelerationSupport.targetValue(
             for: MouseAccelerationSupport.linearScalingKey,
-            originalIsBoolean: true
+            original: MouseAccelerationStoredValue(rawValue: 0, isBoolean: true),
+            preferences: pointerPreferences,
+            supportsLinearScaling: true
+        ) == MouseAccelerationStoredValue(rawValue: 0, isBoolean: true)
+            && MouseAccelerationSupport.targetValue(
+                for: MouseAccelerationSupport.mouseAccelerationKey,
+                original: mouseRecovery.original,
+                preferences: pointerPreferences,
+                supportsLinearScaling: true
+            ) == MouseAccelerationStoredValue(rawValue: 81_920, isBoolean: false),
+               "custom pointer acceleration leaves linear mode and writes 16.16 fixed point")
+        let disabledPointerPreferences = MousePointerPreferences(
+            disablesAcceleration: true,
+            acceleration: 1.25,
+            speed: pointerSpeedRoundTrip
+        )
+        expect(MouseAccelerationSupport.targetValue(
+            for: MouseAccelerationSupport.linearScalingKey,
+            original: MouseAccelerationStoredValue(rawValue: 0, isBoolean: true),
+            preferences: disabledPointerPreferences,
+            supportsLinearScaling: true
         ) == MouseAccelerationStoredValue(rawValue: 1, isBoolean: true)
             && MouseAccelerationSupport.targetValue(
                 for: MouseAccelerationSupport.mouseAccelerationKey,
-                originalIsBoolean: false
+                original: mouseRecovery.original,
+                preferences: disabledPointerPreferences,
+                supportsLinearScaling: false
             ) == MouseAccelerationStoredValue(rawValue: -1, isBoolean: false),
-               "mouse acceleration uses linear mode when supported and the legacy fallback otherwise")
+               "pointer acceleration uses linear mode when supported and the legacy fallback otherwise")
         expect(AppFeature.switcher.availabilityKey == "featureAvailable.switcher",
                "availability key derives from the raw value")
         expect(AppFeature.availabilityDefaults.count == AppFeature.allCases.count

@@ -34,7 +34,7 @@ enum MouseAccelerationRecovery {
                                         servicesByID: servicesByID,
                                         reservedRegistryIDs: reservedRegistryIDs) else { continue }
             if setAndVerify(entry.original, key: entry.key, on: service) {
-                journal.remove(registryID: entry.registryID)
+                journal.remove(registryID: entry.registryID, key: entry.key)
             }
         }
         return writeJournal(journal) && journal.entries.isEmpty
@@ -54,9 +54,10 @@ enum MouseAccelerationRecovery {
     }
 
     static func remove(registryID: UInt64,
+                       key: String,
                        from journal: inout MouseAccelerationRecoveryJournal) -> Bool {
         var updated = journal
-        updated.remove(registryID: registryID)
+        updated.remove(registryID: registryID, key: key)
         guard writeJournal(updated) else { return false }
         journal = updated
         return true
@@ -103,14 +104,8 @@ enum MouseAccelerationRecovery {
 
     static func captureEntry(for service: IOHIDServiceClient,
                              registryID: UInt64,
-                             identity: MouseAccelerationDeviceIdentity) -> MouseAccelerationRecoveryEntry? {
-        if let value = storedValue(for: MouseAccelerationSupport.linearScalingKey, on: service) {
-            return MouseAccelerationRecoveryEntry(registryID: registryID,
-                                                  identity: identity,
-                                                  key: MouseAccelerationSupport.linearScalingKey,
-                                                  original: value)
-        }
-        let key = accelerationKey(for: service)
+                             identity: MouseAccelerationDeviceIdentity,
+                             key: String) -> MouseAccelerationRecoveryEntry? {
         guard let value = storedValue(for: key, on: service) else { return nil }
         return MouseAccelerationRecoveryEntry(registryID: registryID,
                                               identity: identity,
@@ -119,13 +114,16 @@ enum MouseAccelerationRecovery {
     }
 
     static func applyTarget(for entry: MouseAccelerationRecoveryEntry,
+                            preferences: MousePointerPreferences,
+                            supportsLinearScaling: Bool,
                             to service: IOHIDServiceClient) -> Bool {
-        setAndVerify(MouseAccelerationSupport.targetValue(
-                         for: entry.key,
-                         originalIsBoolean: entry.original.isBoolean
-                     ),
-                     key: entry.key,
-                     on: service)
+        guard let target = MouseAccelerationSupport.targetValue(
+            for: entry.key,
+            original: entry.original,
+            preferences: preferences,
+            supportsLinearScaling: supportsLinearScaling
+        ) else { return false }
+        return setAndVerify(target, key: entry.key, on: service)
     }
 
     static func restore(_ entry: MouseAccelerationRecoveryEntry,
@@ -149,8 +147,8 @@ enum MouseAccelerationRecovery {
             try? FileManager.default.removeItem(at: url)
             return MouseAccelerationRecoveryJournal(bootTime: bootTime, entries: [])
         }
-        let registryIDs = journal.entries.map(\.registryID)
-        guard Set(registryIDs).count == registryIDs.count,
+        let propertyIDs = journal.entries.map { "\($0.registryID):\($0.key)" }
+        guard Set(propertyIDs).count == propertyIDs.count,
               journal.entries.allSatisfy({
                   MouseAccelerationSupport.validatedRegistryID($0.registryID) != nil
                       && MouseAccelerationSupport.isRestorableKey($0.key)
@@ -185,7 +183,7 @@ enum MouseAccelerationRecovery {
         return Int64(bootTime.tv_sec)
     }
 
-    private static func accelerationKey(for service: IOHIDServiceClient) -> String {
+    static func accelerationKey(for service: IOHIDServiceClient) -> String {
         if let key = stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,
                                     of: service),
            key == MouseAccelerationSupport.pointerAccelerationKey
@@ -218,8 +216,8 @@ enum MouseAccelerationRecovery {
         return matches.count == 1 ? matches[0] : nil
     }
 
-    private static func storedValue(for key: String,
-                                    on service: IOHIDServiceClient) -> MouseAccelerationStoredValue? {
+    static func storedValue(for key: String,
+                            on service: IOHIDServiceClient) -> MouseAccelerationStoredValue? {
         guard let value = IOHIDServiceClientCopyProperty(service, key as CFString),
               let number = value as? NSNumber else { return nil }
         return MouseAccelerationStoredValue(
