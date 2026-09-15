@@ -36,6 +36,12 @@ final class MouseAccelerationService {
         startIfAllowed()
     }
 
+    func revertToSystemDefaults() {
+        defaults.set(false, forKey: DefaultsKey.mousePointerCustomized)
+        defaults.set(false, forKey: DefaultsKey.mouseAccelerationDisabled)
+        stop()
+    }
+
     /// Restores every value owned by this feature before its process goes away.
     @discardableResult
     func stop() -> Bool {
@@ -72,7 +78,7 @@ final class MouseAccelerationService {
             applyPointerPreferences()
             return
         }
-        let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
+        guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return }
         _ = MouseAccelerationRecovery.restorePending(using: client)
         self.client = client
         startDeviceObservation()
@@ -121,6 +127,17 @@ final class MouseAccelerationService {
                 customizesPointer: customizesPointer,
                 accelerationKey: accelerationKey
             )
+
+            for staleEntry in journal.staleEntries(registryID: id,
+                                                    identity: identity,
+                                                    preserving: keys) {
+                guard MouseAccelerationRecovery.restore(staleEntry, on: service),
+                      MouseAccelerationRecovery.remove(registryID: id,
+                                                       key: staleEntry.key,
+                                                       from: &journal) else {
+                    continue
+                }
+            }
 
             for key in keys {
                 let entry: MouseAccelerationRecoveryEntry
@@ -203,7 +220,7 @@ final class MouseAccelerationService {
                   self.sessionIsActive, self.systemIsAwake else { return }
             // Physical-device callbacks can precede the event-system service, and
             // its initial settings can arrive later still. Read a fresh service list.
-            let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
+            guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return }
             self.client = client
             _ = MouseAccelerationRecovery.restorePending(using: client,
                                                           preservingConnectedEntries: true)
@@ -217,11 +234,13 @@ final class MouseAccelerationService {
     private func startDeviceObservation() {
         guard hidManager == nil else { return }
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-        let match: [String: Any] = [
-            kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
-            kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Mouse,
-        ]
-        IOHIDManagerSetDeviceMatching(manager, match as CFDictionary)
+        let matches: [[String: Any]] = [kHIDUsage_GD_Mouse, kHIDUsage_GD_Pointer].map { usage in
+            [
+                kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
+                kIOHIDDeviceUsageKey as String: usage,
+            ]
+        }
+        IOHIDManagerSetDeviceMatchingMultiple(manager, matches as CFArray)
         let context = Unmanaged.passUnretained(self).toOpaque()
         IOHIDManagerRegisterDeviceMatchingCallback(manager, Self.deviceChanged, context)
         IOHIDManagerRegisterDeviceRemovalCallback(manager, Self.deviceChanged, context)

@@ -11,7 +11,7 @@ enum MouseAccelerationRecovery {
     static func restorePending() -> Bool {
         guard let journal = loadJournal() else { return false }
         guard !journal.entries.isEmpty else { return true }
-        let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
+        guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return false }
         return restorePending(using: client)
     }
 
@@ -92,9 +92,13 @@ enum MouseAccelerationRecovery {
     }
 
     static func isMouse(_ service: IOHIDServiceClient) -> Bool {
-        guard IOHIDServiceClientConformsTo(service,
-                                           UInt32(kHIDPage_GenericDesktop),
-                                           UInt32(kHIDUsage_GD_Mouse)) != 0 else {
+        let conformsToMouse = IOHIDServiceClientConformsTo(service,
+                                                           UInt32(kHIDPage_GenericDesktop),
+                                                           UInt32(kHIDUsage_GD_Mouse)) != 0
+        let conformsToPointer = IOHIDServiceClientConformsTo(service,
+                                                             UInt32(kHIDPage_GenericDesktop),
+                                                             UInt32(kHIDUsage_GD_Pointer)) != 0
+        guard conformsToMouse || conformsToPointer else {
             return false
         }
         let accelerationType = stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,

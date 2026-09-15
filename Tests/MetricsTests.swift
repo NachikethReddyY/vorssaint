@@ -15080,7 +15080,7 @@ struct MetricsTests {
                 )
             }
         }
-        expect(lateMouseReset && lateMouseValue?.rawValue == -1,
+        expect(lateMouseReset && lateMouseValue?.rawValue == -65_536,
                "acceleration is reapplied when a mouse service and its settings arrive after the physical callback")
         expect(mouseReapplyAttempts > 1 && mouseReapplyAttempts < 20
                 && mouseReapplyTime > 2 && mouseReapplyTime <= 5
@@ -15157,8 +15157,37 @@ struct MetricsTests {
                 original: mouseRecovery.original,
                 preferences: disabledPointerPreferences,
                 supportsLinearScaling: false
-            ) == MouseAccelerationStoredValue(rawValue: -1, isBoolean: false),
+            ) == MouseAccelerationStoredValue(rawValue: -65_536, isBoolean: false),
                "pointer acceleration uses linear mode when supported and the legacy fallback otherwise")
+        var pointerTransitionJournal = MouseAccelerationRecoveryJournal(
+            bootTime: 1,
+            entries: [
+                MouseAccelerationRecoveryEntry(
+                    registryID: 8,
+                    identity: mouseIdentity,
+                    key: MouseAccelerationSupport.linearScalingKey,
+                    original: MouseAccelerationStoredValue(rawValue: 0, isBoolean: true)
+                ),
+                MouseAccelerationRecoveryEntry(
+                    registryID: 8,
+                    identity: mouseIdentity,
+                    key: MouseAccelerationSupport.pointerResolutionKey,
+                    original: MouseAccelerationStoredValue(rawValue: 26_214_400, isBoolean: false)
+                ),
+            ]
+        )
+        let stalePointerEntries = pointerTransitionJournal.staleEntries(
+            registryID: 8,
+            identity: mouseIdentity,
+            preserving: [MouseAccelerationSupport.linearScalingKey]
+        )
+        expect(stalePointerEntries.map(\.key) == [MouseAccelerationSupport.pointerResolutionKey],
+               "turning off custom pointer scaling identifies properties that must be restored")
+        pointerTransitionJournal.remove(registryID: 8,
+                                        key: MouseAccelerationSupport.pointerResolutionKey)
+        expect(pointerTransitionJournal.entries.map(\.key)
+                == [MouseAccelerationSupport.linearScalingKey],
+               "restored pointer properties leave active acceleration-disable recovery intact")
         expect(AppFeature.switcher.availabilityKey == "featureAvailable.switcher",
                "availability key derives from the raw value")
         expect(AppFeature.availabilityDefaults.count == AppFeature.allCases.count
@@ -21783,8 +21812,11 @@ struct MetricsTests {
                 && backupKeys.contains(DefaultsKey.panelControlMouseClickDebounce),
                "mouse click debounce preferences travel with the settings backup")
         expect(backupKeys.contains(DefaultsKey.mouseAccelerationDisabled)
+                && backupKeys.contains(DefaultsKey.mousePointerCustomized)
+                && backupKeys.contains(DefaultsKey.mousePointerAcceleration)
+                && backupKeys.contains(DefaultsKey.mousePointerSpeed)
                 && backupKeys.contains(DefaultsKey.panelControlMouseAcceleration),
-               "mouse acceleration preferences travel with the settings backup")
+               "mouse pointer preferences travel with the settings backup")
         expect(MouseExceptionScope.allCases.allSatisfy { backupKeys.contains($0.defaultsKey) },
                "the apps each mouse feature leaves alone travel with the settings backup")
         expect(backupKeys.contains(DefaultsKey.clipboardHistoryIgnoredApps),
@@ -26073,6 +26105,31 @@ struct MetricsTests {
             encoding: .utf8)) ?? ""
         expect(mouseAccelerationSource.contains("SessionActivitySupport.isOnConsole("),
                "mouse acceleration shares the safe initial session-state fallback")
+        expect(mouseAccelerationSource.contains("kHIDUsage_GD_Mouse")
+                && mouseAccelerationSource.contains("kHIDUsage_GD_Pointer")
+                && mouseAccelerationSource.contains("IOHIDManagerSetDeviceMatchingMultiple"),
+               "mouse pointer changes reapply when either mouse- or pointer-usage HID devices reconnect")
+        let mouseSettingsSource = (try? String(
+            contentsOfFile: "Sources/Vorssaint/UI/Settings/SettingsView.swift",
+            encoding: .utf8)) ?? ""
+        expect(mouseSettingsSource.contains("DefaultsKey.mousePointerAcceleration")
+                && mouseSettingsSource.contains("DefaultsKey.mousePointerSpeed")
+                && mouseSettingsSource.contains("MouseAccelerationService.shared.revertToSystemDefaults()")
+                && mouseSettingsSource.contains("mousePointerText.dpiNote"),
+               "Mouse & Trackpad exposes truthful native pointer controls and a system-default restore")
+        expect(AppLanguage.allCases.allSatisfy {
+            let pointer = FeatureStrings.mousePointer($0)
+            return !pointer.section.isEmpty && !pointer.customize.isEmpty
+                && !pointer.caption.isEmpty && !pointer.acceleration.isEmpty
+                && !pointer.trackingSpeed.isEmpty && !pointer.speed.isEmpty
+                && !pointer.revert.isEmpty && !pointer.dpiNote.isEmpty
+        }, "mouse pointer controls are complete in every supported language")
+        let thirdPartyNotices = (try? String(contentsOfFile: "THIRD_PARTY_NOTICES.md",
+                                             encoding: .utf8)) ?? ""
+        expect(thirdPartyNotices.contains("Copyright (c) 2021-2026 LinearMouse")
+                && thirdPartyNotices.contains("Copyright (C) 2020 Apple Inc.")
+                && buildScript.contains("cp THIRD_PARTY_NOTICES.md"),
+               "pointer-control notices are retained in source and packaged builds")
         for tapOwner in ["Sources/Vorssaint/Services/ScrollInverter.swift",
                          "Sources/Vorssaint/Services/SmoothScrollService.swift",
                          "Sources/Vorssaint/Services/MouseNavigation/MouseNavigationService.swift",

@@ -80,6 +80,17 @@ struct MouseAccelerationRecoveryJournal: Codable, Equatable {
     mutating func remove(registryID: UInt64, key: String) {
         entries.removeAll { $0.registryID == registryID && $0.key == key }
     }
+
+    func staleEntries(registryID: UInt64,
+                      identity: MouseAccelerationDeviceIdentity,
+                      preserving keys: [String]) -> [MouseAccelerationRecoveryEntry] {
+        let preservedKeys = Set(keys)
+        return entries.filter {
+            $0.registryID == registryID
+                && $0.identity.matches(identity)
+                && !preservedKeys.contains($0.key)
+        }
+    }
 }
 
 /// A short settling window after hotplug, never a repeating idle timer.
@@ -188,7 +199,7 @@ enum MouseAccelerationSupport {
             return fixedPoint(pointerResolution(forSpeed: preferences.speed))
         }
         if preferences.disablesAcceleration && !supportsLinearScaling {
-            return MouseAccelerationStoredValue(rawValue: -1, isBoolean: false)
+            return fixedPoint(-1)
         }
         return fixedPoint(sanitizedAcceleration(preferences.acceleration))
     }

@@ -915,6 +915,11 @@ struct MouseSettings: View {
     @AppStorage(DefaultsKey.smoothScrollEnabled) private var smoothScrollEnabled = false
     @AppStorage(DefaultsKey.smoothScrollStep) private var smoothScrollStep = SmoothScrollSupport.defaultStep
     @AppStorage(DefaultsKey.mouseAccelerationDisabled) private var mouseAccelerationDisabled = false
+    @AppStorage(DefaultsKey.mousePointerCustomized) private var mousePointerCustomized = false
+    @AppStorage(DefaultsKey.mousePointerAcceleration) private var mousePointerAcceleration =
+        MouseAccelerationSupport.defaultAcceleration
+    @AppStorage(DefaultsKey.mousePointerSpeed) private var mousePointerSpeed =
+        MouseAccelerationSupport.defaultSpeed
     @AppStorage(DefaultsKey.smoothScrollResponse) private var smoothScrollResponse =
         SmoothScrollSupport.defaultResponse
     @AppStorage(DefaultsKey.mouseNavigationEnabled) private var mouseNavigationEnabled = false
@@ -930,6 +935,10 @@ struct MouseSettings: View {
 
     private var mouseClickDebounceText: MouseClickDebounceStrings {
         FeatureStrings.mouseClickDebounce(l10n.language)
+    }
+
+    private var mousePointerText: MousePointerStrings {
+        FeatureStrings.mousePointer(l10n.language)
     }
 
     var body: some View {
@@ -1035,14 +1044,49 @@ struct MouseSettings: View {
                 .settingsSectionAnchor(.smoothScroll)
             }
             if AppFeature.mouseAcceleration.isAvailable {
-                Section(l10n.s.mouseAccelerationName) {
-                    Toggle(l10n.s.mouseAccelerationName, isOn: $mouseAccelerationDisabled)
-                        .onChange(of: mouseAccelerationDisabled) { _, _ in
-                            MouseAccelerationService.shared.syncWithPreferences()
-                        }
-                    Text(l10n.s.mouseAccelerationCaption)
+                Section(mousePointerText.section) {
+                    Toggle(mousePointerText.customize, isOn: mousePointerCustomizationBinding)
+                    Text(mousePointerText.caption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if mousePointerControlsEnabled {
+                        Toggle(l10n.s.mouseAccelerationName, isOn: $mouseAccelerationDisabled)
+                            .onChange(of: mouseAccelerationDisabled) { _, _ in
+                                MouseAccelerationService.shared.syncWithPreferences()
+                            }
+                        HStack {
+                            Slider(value: mousePointerAccelerationBinding,
+                                   in: MouseAccelerationSupport.accelerationRange,
+                                   step: 0.0625) {
+                                Text(mouseAccelerationDisabled
+                                     ? mousePointerText.trackingSpeed
+                                     : mousePointerText.acceleration)
+                            }
+                            Text(pointerValue(mousePointerAcceleration))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 52, alignment: .trailing)
+                        }
+                        if !mouseAccelerationDisabled {
+                            HStack {
+                                Slider(value: mousePointerSpeedBinding,
+                                       in: MouseAccelerationSupport.speedRange,
+                                       step: 0.01) {
+                                    Text(mousePointerText.speed)
+                                }
+                                Text(pointerValue(mousePointerSpeed))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 52, alignment: .trailing)
+                            }
+                        }
+                        Button(mousePointerText.revert) {
+                            MouseAccelerationService.shared.revertToSystemDefaults()
+                        }
+                        Text(mousePointerText.dpiNote)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .settingsSectionAnchor(.mouseAcceleration)
             }
@@ -1175,6 +1219,52 @@ struct MouseSettings: View {
             get: { Double(SmoothScrollSupport.sanitizedResponse(smoothScrollResponse)) },
             set: { smoothScrollResponse = Int($0) }
         )
+    }
+
+    private var mousePointerAccelerationBinding: Binding<Double> {
+        Binding(
+            get: {
+                MouseAccelerationSupport.sanitizedAcceleration(mousePointerAcceleration)
+            },
+            set: {
+                mousePointerAcceleration = MouseAccelerationSupport.sanitizedAcceleration($0)
+                mousePointerCustomized = true
+                MouseAccelerationService.shared.syncWithPreferences()
+            }
+        )
+    }
+
+    private var mousePointerControlsEnabled: Bool {
+        mousePointerCustomized || mouseAccelerationDisabled
+    }
+
+    private var mousePointerCustomizationBinding: Binding<Bool> {
+        Binding(
+            get: { mousePointerControlsEnabled },
+            set: { enabled in
+                if enabled {
+                    mousePointerCustomized = true
+                    MouseAccelerationService.shared.syncWithPreferences()
+                } else {
+                    MouseAccelerationService.shared.revertToSystemDefaults()
+                }
+            }
+        )
+    }
+
+    private var mousePointerSpeedBinding: Binding<Double> {
+        Binding(
+            get: { MouseAccelerationSupport.sanitizedSpeed(mousePointerSpeed) },
+            set: {
+                mousePointerSpeed = MouseAccelerationSupport.sanitizedSpeed($0)
+                mousePointerCustomized = true
+                MouseAccelerationService.shared.syncWithPreferences()
+            }
+        )
+    }
+
+    private func pointerValue(_ value: Double) -> String {
+        String(format: "%.4g", value)
     }
 
     private var focusFollowsMouseDelayBinding: Binding<Double> {
