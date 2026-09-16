@@ -135,6 +135,8 @@ enum MousePointerProfileStore {
 enum MousePointerDeviceKind: String, Codable {
     case mouse
     case trackpad
+
+    var supportsMouseButtons: Bool { self == .mouse }
 }
 
 struct MousePointerDeviceDescriptor: Identifiable, Equatable {

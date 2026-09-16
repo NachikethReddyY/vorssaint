@@ -14984,6 +14984,9 @@ struct MetricsTests {
                 && MouseAccelerationSupport.validatedRegistryID(0) == nil
                 && MouseAccelerationSupport.validatedRegistryID(42) == 42,
                "mouse acceleration never turns a missing registry id into shared identity zero")
+        expect(MousePointerDeviceKind.mouse.supportsMouseButtons
+                && !MousePointerDeviceKind.trackpad.supportsMouseButtons,
+               "mouse-only button controls never appear inside a trackpad card")
         let mouseIdentity = MouseAccelerationDeviceIdentity(
             vendorID: 1,
             productID: 2,
