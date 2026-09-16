@@ -11,7 +11,7 @@ enum MouseAccelerationRecovery {
     static func restorePending() -> Bool {
         guard let journal = loadJournal() else { return false }
         guard !journal.entries.isEmpty else { return true }
-        let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
+        guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return false }
         return restorePending(using: client)
     }
 
@@ -34,7 +34,7 @@ enum MouseAccelerationRecovery {
                                         servicesByID: servicesByID,
                                         reservedRegistryIDs: reservedRegistryIDs) else { continue }
             if setAndVerify(entry.original, key: entry.key, on: service) {
-                journal.remove(registryID: entry.registryID)
+                journal.remove(registryID: entry.registryID, key: entry.key)
             }
         }
         return writeJournal(journal) && journal.entries.isEmpty
@@ -54,9 +54,10 @@ enum MouseAccelerationRecovery {
     }
 
     static func remove(registryID: UInt64,
+                       key: String,
                        from journal: inout MouseAccelerationRecoveryJournal) -> Bool {
         var updated = journal
-        updated.remove(registryID: registryID)
+        updated.remove(registryID: registryID, key: key)
         guard writeJournal(updated) else { return false }
         journal = updated
         return true
@@ -90,27 +91,56 @@ enum MouseAccelerationRecovery {
         )
     }
 
-    static func isMouse(_ service: IOHIDServiceClient) -> Bool {
-        guard IOHIDServiceClientConformsTo(service,
-                                           UInt32(kHIDPage_GenericDesktop),
-                                           UInt32(kHIDUsage_GD_Mouse)) != 0 else {
+    static func isPointer(_ service: IOHIDServiceClient) -> Bool {
+        let conformsToMouse = IOHIDServiceClientConformsTo(service,
+                                                           UInt32(kHIDPage_GenericDesktop),
+                                                           UInt32(kHIDUsage_GD_Mouse)) != 0
+        let conformsToPointer = IOHIDServiceClientConformsTo(service,
+                                                             UInt32(kHIDPage_GenericDesktop),
+                                                             UInt32(kHIDUsage_GD_Pointer)) != 0
+        return conformsToMouse || conformsToPointer
+    }
+
+    static func isTrackpad(_ service: IOHIDServiceClient) -> Bool {
+        guard isPointer(service) else { return false }
+        let vendorID = numberProperty("VendorID", of: service)
+        let productID = numberProperty("ProductID", of: service)
+        let appleVendors: Set<Int64> = [0x004C, 0x05AC]
+        let magicMouseProducts: Set<Int64> = [0x0269, 0x030D]
+        if let vendorID, let productID,
+           appleVendors.contains(vendorID), magicMouseProducts.contains(productID) {
             return false
         }
-        let accelerationType = stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,
-                                              of: service)
-        return accelerationType != MouseAccelerationSupport.trackpadAccelerationType
+        if IOHIDServiceClientConformsTo(service,
+                                        UInt32(kHIDPage_Digitizer),
+                                        UInt32(kHIDUsage_Dig_TouchPad)) != 0 {
+            return true
+        }
+        return stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,
+                              of: service) == MouseAccelerationSupport.trackpadAccelerationType
+    }
+
+    static func descriptor(of service: IOHIDServiceClient) -> MousePointerDeviceDescriptor? {
+        guard let registryID = registryID(of: service),
+              let identity = identity(of: service) else { return nil }
+        let name = stringProperty("Product", of: service)
+            ?? stringProperty("ProductName", of: service)
+            ?? (isTrackpad(service) ? "Trackpad" : "Mouse")
+        guard let preferenceKey = identity.preferenceKey(fallbackName: name) else { return nil }
+        return MousePointerDeviceDescriptor(
+            id: preferenceKey,
+            registryID: registryID,
+            preferenceKey: preferenceKey,
+            name: name,
+            transport: identity.transport,
+            kind: isTrackpad(service) ? .trackpad : .mouse
+        )
     }
 
     static func captureEntry(for service: IOHIDServiceClient,
                              registryID: UInt64,
-                             identity: MouseAccelerationDeviceIdentity) -> MouseAccelerationRecoveryEntry? {
-        if let value = storedValue(for: MouseAccelerationSupport.linearScalingKey, on: service) {
-            return MouseAccelerationRecoveryEntry(registryID: registryID,
-                                                  identity: identity,
-                                                  key: MouseAccelerationSupport.linearScalingKey,
-                                                  original: value)
-        }
-        let key = accelerationKey(for: service)
+                             identity: MouseAccelerationDeviceIdentity,
+                             key: String) -> MouseAccelerationRecoveryEntry? {
         guard let value = storedValue(for: key, on: service) else { return nil }
         return MouseAccelerationRecoveryEntry(registryID: registryID,
                                               identity: identity,
@@ -119,13 +149,16 @@ enum MouseAccelerationRecovery {
     }
 
     static func applyTarget(for entry: MouseAccelerationRecoveryEntry,
+                            preferences: MousePointerPreferences,
+                            supportsLinearScaling: Bool,
                             to service: IOHIDServiceClient) -> Bool {
-        setAndVerify(MouseAccelerationSupport.targetValue(
-                         for: entry.key,
-                         originalIsBoolean: entry.original.isBoolean
-                     ),
-                     key: entry.key,
-                     on: service)
+        guard let target = MouseAccelerationSupport.targetValue(
+            for: entry.key,
+            original: entry.original,
+            preferences: preferences,
+            supportsLinearScaling: supportsLinearScaling
+        ) else { return false }
+        return setAndVerify(target, key: entry.key, on: service)
     }
 
     static func restore(_ entry: MouseAccelerationRecoveryEntry,
@@ -149,8 +182,8 @@ enum MouseAccelerationRecovery {
             try? FileManager.default.removeItem(at: url)
             return MouseAccelerationRecoveryJournal(bootTime: bootTime, entries: [])
         }
-        let registryIDs = journal.entries.map(\.registryID)
-        guard Set(registryIDs).count == registryIDs.count,
+        let propertyIDs = journal.entries.map { "\($0.registryID):\($0.key)" }
+        guard Set(propertyIDs).count == propertyIDs.count,
               journal.entries.allSatisfy({
                   MouseAccelerationSupport.validatedRegistryID($0.registryID) != nil
                       && MouseAccelerationSupport.isRestorableKey($0.key)
@@ -185,11 +218,12 @@ enum MouseAccelerationRecovery {
         return Int64(bootTime.tv_sec)
     }
 
-    private static func accelerationKey(for service: IOHIDServiceClient) -> String {
+    static func accelerationKey(for service: IOHIDServiceClient) -> String {
         if let key = stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,
                                     of: service),
            key == MouseAccelerationSupport.pointerAccelerationKey
-            || key == MouseAccelerationSupport.mouseAccelerationKey {
+            || key == MouseAccelerationSupport.mouseAccelerationKey
+            || key == MouseAccelerationSupport.trackpadAccelerationKey {
             return key
         }
         if storedValue(for: MouseAccelerationSupport.pointerAccelerationKey, on: service) != nil {
@@ -209,7 +243,7 @@ enum MouseAccelerationRecovery {
         }
         guard entry.identity.canMatchAcrossRegistryIDs else { return nil }
         let matches = services.filter { service in
-            guard isMouse(service),
+            guard isPointer(service),
                   let registryID = registryID(of: service),
                   !reservedRegistryIDs.contains(registryID),
                   let liveIdentity = identity(of: service) else { return false }
@@ -218,8 +252,8 @@ enum MouseAccelerationRecovery {
         return matches.count == 1 ? matches[0] : nil
     }
 
-    private static func storedValue(for key: String,
-                                    on service: IOHIDServiceClient) -> MouseAccelerationStoredValue? {
+    static func storedValue(for key: String,
+                            on service: IOHIDServiceClient) -> MouseAccelerationStoredValue? {
         guard let value = IOHIDServiceClientCopyProperty(service, key as CFString),
               let number = value as? NSNumber else { return nil }
         return MouseAccelerationStoredValue(
@@ -245,13 +279,13 @@ enum MouseAccelerationRecovery {
         return value.rawValue as CFNumber
     }
 
-    private static func numberProperty(_ key: String,
-                                       of service: IOHIDServiceClient) -> Int64? {
+    static func numberProperty(_ key: String,
+                               of service: IOHIDServiceClient) -> Int64? {
         (IOHIDServiceClientCopyProperty(service, key as CFString) as? NSNumber)?.int64Value
     }
 
-    private static func stringProperty(_ key: String,
-                                       of service: IOHIDServiceClient) -> String? {
+    static func stringProperty(_ key: String,
+                               of service: IOHIDServiceClient) -> String? {
         guard let value = IOHIDServiceClientCopyProperty(service, key as CFString) else {
             return nil
         }

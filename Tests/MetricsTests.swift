@@ -20,6 +20,7 @@ struct MetricsTests {
         let groups: [(String, () -> Void)] = [
             ("harness", { TestHarnessTests.run(suite) }),
             ("core", { coreChecks(suite) }),
+            ("capture", { ScreenshotSelectionRefreshContract.run(suite) }),
             ("keyboard", {
                 assistiveKeyboardChecks { suite.expect($0, $1) }
                 screenshotToolShortcutChecks { suite.expect($0, $1) }
@@ -36,6 +37,7 @@ struct MetricsTests {
             ("network", { SpeedTestTests.run { suite.expect($0, $1) } }),
             ("app-updates", { AppUpdatesContract.run(suite) }),
             ("localization", { LocalizationTests.run(suite) }),
+            ("cleaner", { CleanerEligibilityTests.run(suite) }),
             ("launcher", { QuickLauncherContract.run(suite) }),
             ("switcher", { SwitcherScrollContract.run(suite) }),
         ]
@@ -86,6 +88,7 @@ struct MetricsTests {
 
         NotchTests.run { expect($0, $1) }
         NotchVolumeKeyTests.run { expect($0, $1) }
+        MixerOutputAdjustmentContract.run(suite)
 
         // MARK: Byte / rate formatting
 
@@ -733,6 +736,9 @@ struct MetricsTests {
         expectEqual(ClipboardHistorySensitiveText.concealedPasteboardType,
                     "org.nspasteboard.ConcealedType",
                     "the secret mark keeps the exact name the apps that write it use")
+
+        ClipboardHistoryWriteTests.run { expect($0, $1) }
+        ClipboardHistoryAccessTests.run { expect($0, $1) }
 
         let pasteboardAccess = GeneralPasteboardAccess(label: "Vorssaint.Tests.PasteboardAccess")
         let pasteboardGroup = DispatchGroup()
@@ -3765,10 +3771,10 @@ struct MetricsTests {
         // decision above is made consciously, never by omission.
         let releasePlist = NSDictionary(contentsOfFile: "Resources/Info.plist")
         let plistVersion = (releasePlist?["CFBundleShortVersionString"] as? String) ?? ""
-        expect(plistVersion == "3.3.5",
+        expect(plistVersion == "3.4.0-beta.1",
                "bumping the app version requires re-deciding the support prompt pin above")
         let plistBuild = (releasePlist?["CFBundleVersion"] as? String) ?? ""
-        expect(plistBuild == "86",
+        expect(plistBuild == "87",
                "every app version needs its own incremented bundle build")
         expect(SupportUpdateIntroInfo.releaseVersion == "3.3.2",
                "the support prompt remains deliberately pinned to 3.3.2")
@@ -3828,8 +3834,13 @@ struct MetricsTests {
         expect(registeredDefaults[DefaultsKey.mouseNavigationEnabled] as? Bool == false,
                "mouse side-button navigation is opt-in")
         expect(registeredDefaults[DefaultsKey.mouseAccelerationDisabled] as? Bool == false
+                && registeredDefaults[DefaultsKey.mousePointerCustomized] as? Bool == false
+                && registeredDefaults[DefaultsKey.mousePointerAcceleration] as? Double
+                    == MouseAccelerationSupport.defaultAcceleration
+                && registeredDefaults[DefaultsKey.mousePointerSpeed] as? Double
+                    == MouseAccelerationSupport.defaultSpeed
                 && registeredDefaults[DefaultsKey.panelControlMouseAcceleration] as? Bool == true,
-               "mouse acceleration control is opt-in and visible in the panel when installed")
+               "mouse pointer control starts at a no-change default and remains visible when installed")
         expect(registeredDefaults[DefaultsKey.mouseClickDebounceEnabled] as? Bool == false,
                "mouse click debounce is opt-in")
         expect(registeredDefaults[DefaultsKey.mouseClickDebounceWindowMs] as? Int
@@ -14973,6 +14984,9 @@ struct MetricsTests {
                 && MouseAccelerationSupport.validatedRegistryID(0) == nil
                 && MouseAccelerationSupport.validatedRegistryID(42) == 42,
                "mouse acceleration never turns a missing registry id into shared identity zero")
+        expect(MousePointerDeviceKind.mouse.supportsMouseButtons
+                && !MousePointerDeviceKind.trackpad.supportsMouseButtons,
+               "mouse-only button controls never appear inside a trackpad card")
         let mouseIdentity = MouseAccelerationDeviceIdentity(
             vendorID: 1,
             productID: 2,
@@ -14988,9 +15002,21 @@ struct MetricsTests {
             original: MouseAccelerationStoredValue(rawValue: 45_056, isBoolean: false)
         )
         var mouseJournal = MouseAccelerationRecoveryJournal(bootTime: 7, entries: [])
+        let mouseResolutionRecovery = MouseAccelerationRecoveryEntry(
+            registryID: 42,
+            identity: mouseIdentity,
+            key: MouseAccelerationSupport.pointerResolutionKey,
+            original: MouseAccelerationStoredValue(rawValue: 26_214_400, isBoolean: false)
+        )
         mouseJournal.upsert(mouseRecovery)
-        expect(mouseJournal.entry(registryID: 42, identity: mouseIdentity) == mouseRecovery,
-               "mouse acceleration keeps one exact restorable value per live service")
+        mouseJournal.upsert(mouseResolutionRecovery)
+        expect(mouseJournal.entry(registryID: 42,
+                                  identity: mouseIdentity,
+                                  key: mouseRecovery.key) == mouseRecovery
+                && mouseJournal.entry(registryID: 42,
+                                      identity: mouseIdentity,
+                                      key: mouseResolutionRecovery.key) == mouseResolutionRecovery,
+               "mouse pointer control keeps every restorable property for one live service")
         let reusedRegistryIdentity = MouseAccelerationDeviceIdentity(
             vendorID: 9,
             productID: 9,
@@ -14999,16 +15025,23 @@ struct MetricsTests {
             physicalUniqueID: nil,
             serialNumber: nil
         )
-        expect(mouseJournal.entry(registryID: 42, identity: reusedRegistryIdentity) == nil,
+        expect(mouseJournal.entry(registryID: 42,
+                                  identity: reusedRegistryIdentity,
+                                  key: mouseRecovery.key) == nil,
                "a reused registry id can never receive another mouse's saved value")
         expect(mouseJournal.entriesToRestore(preserving: [42: mouseIdentity]).isEmpty
-                && mouseJournal.entry(registryID: 42, identity: mouseIdentity) == mouseRecovery,
+                && mouseJournal.entry(registryID: 42,
+                                      identity: mouseIdentity,
+                                      key: mouseRecovery.key) == mouseRecovery,
                "hotplug retries preserve a connected mouse's original value without restoring acceleration between attempts")
-        expect(mouseJournal.entriesToRestore(preserving: [43: mouseIdentity]) == [mouseRecovery],
+        expect(mouseJournal.entriesToRestore(preserving: [43: mouseIdentity])
+                == [mouseRecovery, mouseResolutionRecovery],
                "a reconnected mouse with a new registry id still needs recovery before recapture")
-        expect(mouseJournal.entriesToRestore(preserving: [42: reusedRegistryIdentity]) == [mouseRecovery],
+        expect(mouseJournal.entriesToRestore(preserving: [42: reusedRegistryIdentity])
+                == [mouseRecovery, mouseResolutionRecovery],
                "an unrelated mouse reusing a registry id cannot hide a pending recovery")
-        expect(mouseJournal.entriesToRestore(preserving: [:]) == [mouseRecovery],
+        expect(mouseJournal.entriesToRestore(preserving: [:])
+                == [mouseRecovery, mouseResolutionRecovery],
                "stopping acceleration control still restores every saved entry")
 
         var mouseReapplication = MouseAccelerationReapplySchedule()
@@ -15039,10 +15072,18 @@ struct MetricsTests {
             }
             if lateMouseValue != nil {
                 lateMouseValue = MouseAccelerationSupport.targetValue(
-                    for: mouseRecovery.key, originalIsBoolean: mouseRecovery.original.isBoolean)
+                    for: mouseRecovery.key,
+                    original: mouseRecovery.original,
+                    preferences: MousePointerPreferences(
+                        disablesAcceleration: true,
+                        acceleration: MouseAccelerationSupport.defaultAcceleration,
+                        speed: MouseAccelerationSupport.defaultSpeed
+                    ),
+                    supportsLinearScaling: false
+                )
             }
         }
-        expect(lateMouseReset && lateMouseValue?.rawValue == -1,
+        expect(lateMouseReset && lateMouseValue?.rawValue == -65_536,
                "acceleration is reapplied when a mouse service and its settings arrive after the physical callback")
         expect(mouseReapplyAttempts > 1 && mouseReapplyAttempts < 20
                 && mouseReapplyTime > 2 && mouseReapplyTime <= 5
@@ -15060,6 +15101,31 @@ struct MetricsTests {
                "resuming creates a fresh retry window without reviving cancelled callbacks")
         expect(mouseIdentity.canMatchAcrossRegistryIDs,
                "a stable physical identity can recover after a device receives a new registry id")
+        expect(mouseIdentity.preferenceKey
+                == "serial|1|2|SERIAL",
+               "a normalized serial number is the strongest persisted pointer-device identity")
+        let locationOnlyMouseIdentity = MouseAccelerationDeviceIdentity(
+            vendorID: 1,
+            productID: 2,
+            locationID: 3,
+            transport: "USB",
+            physicalUniqueID: nil,
+            serialNumber: nil
+        )
+        expect(locationOnlyMouseIdentity.preferenceKey
+                == "location|1|2|3|USB",
+               "a device without a serial keeps an independent port-scoped pointer profile")
+        let builtInTrackpadIdentity = MouseAccelerationDeviceIdentity(
+            vendorID: 0,
+            productID: 0,
+            locationID: 228,
+            transport: "FIFO",
+            physicalUniqueID: nil,
+            serialNumber: nil
+        )
+        expect(builtInTrackpadIdentity.preferenceKey(fallbackName: "Apple Internal Keyboard / Trackpad")
+                == "location|0|0|228|FIFO|APPLEINTERNALKEYBOARDTRACKPAD",
+               "a built-in trackpad with zero USB ids still receives a stable per-device profile")
         let anonymousMouseIdentity = MouseAccelerationDeviceIdentity(
             vendorID: nil,
             productID: nil,
@@ -15070,19 +15136,111 @@ struct MetricsTests {
         )
         expect(!anonymousMouseIdentity.canMatchAcrossRegistryIDs,
                "an anonymous device can never inherit another registry id's saved value")
+        expect(anonymousMouseIdentity.preferenceKey == nil,
+               "an anonymous pointer cannot receive a persisted per-device profile")
+        let pointerMouseProfile = MousePointerProfile(
+            isEnabled: true,
+            disablesAcceleration: false,
+            acceleration: 1.25,
+            speed: 0.3
+        )
+        let trackpadProfile = MousePointerProfile(
+            isEnabled: true,
+            disablesAcceleration: true,
+            acceleration: 2,
+            speed: 0.8
+        )
+        let encodedPointerProfiles = MousePointerProfileStore.encode([
+            "serial|1|2|SERIAL": pointerMouseProfile,
+            "location|5|6|7|SPI": trackpadProfile,
+        ])
+        expect(MousePointerProfileStore.decode(encodedPointerProfiles) == [
+            "serial|1|2|SERIAL": pointerMouseProfile,
+            "location|5|6|7|SPI": trackpadProfile,
+        ], "mouse and trackpad settings persist independently by device identity")
+        expect(MousePointerProfileStore.decode("not json").isEmpty,
+               "damaged per-device pointer settings fail closed")
         expect(MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.linearScalingKey)
                 && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.mouseAccelerationKey)
+                && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.trackpadAccelerationKey)
+                && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.pointerResolutionKey)
                 && !MouseAccelerationSupport.isRestorableKey("UserKeyMapping"),
-               "mouse acceleration recovery accepts only its own HID properties")
+               "mouse pointer recovery accepts only its own HID properties")
+        expect(abs(MouseAccelerationSupport.pointerResolution(forSpeed: 0) - 1_200) < 0.0001
+                && abs(MouseAccelerationSupport.pointerResolution(forSpeed: 1) - 40) < 0.0001
+                && abs(MouseAccelerationSupport.pointerSpeed(forResolution: 40) - 1) < 0.0001
+                && abs(MouseAccelerationSupport.pointerSpeed(forResolution: 1_200)) < 0.0001,
+               "pointer speed maps the UI range onto LinearMouse's practical resolution range")
+        let pointerSpeedRoundTrip = 0.3793
+        expect(abs(MouseAccelerationSupport.pointerSpeed(forResolution:
+                    MouseAccelerationSupport.pointerResolution(forSpeed: pointerSpeedRoundTrip))
+                    - pointerSpeedRoundTrip) < 0.0001,
+               "pointer speed and HID resolution conversions round trip")
+        let pointerPreferences = MousePointerPreferences(
+            disablesAcceleration: false,
+            acceleration: 1.25,
+            speed: pointerSpeedRoundTrip
+        )
         expect(MouseAccelerationSupport.targetValue(
             for: MouseAccelerationSupport.linearScalingKey,
-            originalIsBoolean: true
+            original: MouseAccelerationStoredValue(rawValue: 0, isBoolean: true),
+            preferences: pointerPreferences,
+            supportsLinearScaling: true
+        ) == MouseAccelerationStoredValue(rawValue: 0, isBoolean: true)
+            && MouseAccelerationSupport.targetValue(
+                for: MouseAccelerationSupport.mouseAccelerationKey,
+                original: mouseRecovery.original,
+                preferences: pointerPreferences,
+                supportsLinearScaling: true
+            ) == MouseAccelerationStoredValue(rawValue: 81_920, isBoolean: false),
+               "custom pointer acceleration leaves linear mode and writes 16.16 fixed point")
+        let disabledPointerPreferences = MousePointerPreferences(
+            disablesAcceleration: true,
+            acceleration: 1.25,
+            speed: pointerSpeedRoundTrip
+        )
+        expect(MouseAccelerationSupport.targetValue(
+            for: MouseAccelerationSupport.linearScalingKey,
+            original: MouseAccelerationStoredValue(rawValue: 0, isBoolean: true),
+            preferences: disabledPointerPreferences,
+            supportsLinearScaling: true
         ) == MouseAccelerationStoredValue(rawValue: 1, isBoolean: true)
             && MouseAccelerationSupport.targetValue(
                 for: MouseAccelerationSupport.mouseAccelerationKey,
-                originalIsBoolean: false
-            ) == MouseAccelerationStoredValue(rawValue: -1, isBoolean: false),
-               "mouse acceleration uses linear mode when supported and the legacy fallback otherwise")
+                original: mouseRecovery.original,
+                preferences: disabledPointerPreferences,
+                supportsLinearScaling: false
+            ) == MouseAccelerationStoredValue(rawValue: -65_536, isBoolean: false),
+               "pointer acceleration uses linear mode when supported and the legacy fallback otherwise")
+        var pointerTransitionJournal = MouseAccelerationRecoveryJournal(
+            bootTime: 1,
+            entries: [
+                MouseAccelerationRecoveryEntry(
+                    registryID: 8,
+                    identity: mouseIdentity,
+                    key: MouseAccelerationSupport.linearScalingKey,
+                    original: MouseAccelerationStoredValue(rawValue: 0, isBoolean: true)
+                ),
+                MouseAccelerationRecoveryEntry(
+                    registryID: 8,
+                    identity: mouseIdentity,
+                    key: MouseAccelerationSupport.pointerResolutionKey,
+                    original: MouseAccelerationStoredValue(rawValue: 26_214_400, isBoolean: false)
+                ),
+            ]
+        )
+        let stalePointerEntries = pointerTransitionJournal.staleEntries(
+            registryID: 8,
+            identity: mouseIdentity,
+            preserving: [MouseAccelerationSupport.linearScalingKey]
+        )
+        expect(stalePointerEntries.map(\.key) == [MouseAccelerationSupport.pointerResolutionKey],
+               "turning off custom pointer scaling identifies properties that must be restored")
+        pointerTransitionJournal.remove(registryID: 8,
+                                        key: MouseAccelerationSupport.pointerResolutionKey)
+        expect(pointerTransitionJournal.entries.map(\.key)
+                == [MouseAccelerationSupport.linearScalingKey],
+               "restored pointer properties leave active acceleration-disable recovery intact")
         expect(AppFeature.switcher.availabilityKey == "featureAvailable.switcher",
                "availability key derives from the raw value")
         expect(AppFeature.availabilityDefaults.count == AppFeature.allCases.count
@@ -15104,7 +15262,7 @@ struct MetricsTests {
                "no hub group is empty")
         expect(AppPermission.allCases.map(\.rawValue) == [
             "accessibility", "screenRecording", "fullDiskAccess", "filesAndFolders", "notifications",
-            "automationFinder", "automationTerminal", "audioCapture", "microphone", "camera",
+            "automationFinder", "automationTerminal", "automationPlayback", "audioCapture", "microphone", "camera",
             "appManagement", "calendar",
         ], "permission portal contains every supported permission")
         let onboardingViewSource = (try? String(
@@ -15323,6 +15481,11 @@ struct MetricsTests {
                 && !FanControlPolicy.targetRPMMatches(target: 1_205, expected: 1_200)
                 && !FanControlPolicy.targetRPMMatches(target: .nan, expected: 1_200),
                "fan target verification allows a narrow tolerance and rejects stale or malformed targets")
+        expect(FanControlPolicy.forceTestSatisfied(keyExists: false, writeSucceeded: false)
+                && FanControlPolicy.forceTestSatisfied(keyExists: false, writeSucceeded: true)
+                && FanControlPolicy.forceTestSatisfied(keyExists: true, writeSucceeded: true)
+                && !FanControlPolicy.forceTestSatisfied(keyExists: true, writeSucceeded: false),
+               "the manual-mode fallback needs the force-test override only where the Mac exposes it")
 
         let defaultCurve = FanControlConfiguration.defaultCurve
         expect(FanControlPolicy.validConfiguration(.manual(level: 0))
@@ -17737,6 +17900,41 @@ struct MetricsTests {
         expect(SettingsBackupSupport.exportKeys().contains(
             DefaultsKey.screenshotHideVorssaintWindows),
                "the screenshot window visibility preference travels in backups")
+        // An editor or a pinned capture is an ordinary window, so the
+        // visibility preference has to reach it; the overlays and HUDs taking
+        // the capture stay out either way (issue #780).
+        let workflowWindows: Set<CGWindowID> = [12]
+        let contentWindows: Set<CGWindowID> = [11, 13]
+        expect(ScreenshotCapturePolicy.protectedWindowIDs(
+            workflowWindowIDs: workflowWindows,
+            contentWindowIDs: contentWindows,
+            honoursVisibilityPreference: true
+        ) == workflowWindows,
+        "a screenshot protects only the surfaces taking it")
+        expect(ScreenshotCapturePolicy.protectedWindowIDs(
+            workflowWindowIDs: workflowWindows,
+            contentWindowIDs: contentWindows,
+            honoursVisibilityPreference: false
+        ) == ownScreenshotWindows,
+        "a recording is exempt from the preference and protects both kinds")
+        expect(ScreenshotCapturePolicy.excludedWindowIDs(
+            hideVorssaintWindows: false,
+            ownWindowIDs: ownScreenshotWindows,
+            protectedWindowIDs: ScreenshotCapturePolicy.protectedWindowIDs(
+                workflowWindowIDs: workflowWindows,
+                contentWindowIDs: contentWindows,
+                honoursVisibilityPreference: true)
+        ) == workflowWindows,
+        "showing Vorssaint windows leaves an editor and a pin in the capture")
+        expect(ScreenshotCapturePolicy.canPickWindow(
+            13,
+            isOwnWindow: true,
+            hideVorssaintWindows: false,
+            protectedWindowIDs: ScreenshotCapturePolicy.protectedWindowIDs(
+                workflowWindowIDs: workflowWindows,
+                contentWindowIDs: contentWindows,
+                honoursVisibilityPreference: true)
+        ), "a pinned capture can be picked while Vorssaint windows are shown")
         expect(ScreenshotCapturePolicy.excludedWindowIDs(
             hideVorssaintWindows: true,
             ownWindowIDs: ownScreenshotWindows,
@@ -18370,12 +18568,15 @@ struct MetricsTests {
             screenshotHideVorssaintWindows: true)
         expect(liveScreenshotPolicy == .init(freeze: false, includePointer: true,
                                              hideVorssaintWindows: true,
+                                             keepsContentWindowsOut: true,
                                              usesGeometry: false)
                 && recorderPolicy == .init(freeze: true, includePointer: false,
                                            hideVorssaintWindows: false,
+                                           keepsContentWindowsOut: true,
                                            usesGeometry: true)
                 && textPolicy == .init(freeze: true, includePointer: false,
                                        hideVorssaintWindows: true,
+                                       keepsContentWindowsOut: true,
                                        usesGeometry: false),
                "switching capture mode rebuilds the frozen frame, pointer and window policy")
         let colorPolicy = ScreenshotSupport.unifiedCapturePolicy(
@@ -18387,6 +18588,44 @@ struct MetricsTests {
                 && !textPolicy.sharesSource(with: recorderPolicy)
                 && !textPolicy.sharesSource(with: liveScreenshotPolicy),
                "only freeze, pointer and window policy decide whether a mode needs its own photograph")
+        // With "Hide Vorssaint windows" off, freeze on and the pointer off,
+        // every tool wants the same pixels except for the editors and pins
+        // recording keeps out, so switching to or from recording has to
+        // re-photograph and re-list the pickable windows (issue #780).
+        let shownWindowPolicies = Dictionary(uniqueKeysWithValues: ScreenCaptureTool.allCases.map {
+            ($0, ScreenshotSupport.unifiedCapturePolicy(
+                for: $0,
+                screenshotFreeze: true,
+                screenshotIncludePointer: false,
+                screenshotHideVorssaintWindows: false))
+        })
+        expect(shownWindowPolicies[.recording]?.keepsContentWindowsOut == true
+                && shownWindowPolicies[.screenshot]?.keepsContentWindowsOut == false
+                && shownWindowPolicies[.text]?.keepsContentWindowsOut == false
+                && shownWindowPolicies[.color]?.keepsContentWindowsOut == false,
+               "only recording keeps editors and pins out while Vorssaint windows are shown")
+        expect(shownWindowPolicies[.recording].map { recording in
+            [ScreenCaptureTool.screenshot, .text, .color].allSatisfy { tool in
+                guard let other = shownWindowPolicies[tool] else { return false }
+                return !recording.sharesSource(with: other) && !other.sharesSource(with: recording)
+            }
+        } == true,
+               "switching between recording and screenshot, text or color refreshes the picture and pickable windows both ways")
+        expect(shownWindowPolicies[.screenshot].map { screenshot in
+            [ScreenCaptureTool.text, .color].allSatisfy {
+                shownWindowPolicies[$0].map(screenshot.sharesSource(with:)) == true
+            }
+        } == true,
+               "tools that show the same windows keep the picture they already have")
+        let hiddenWindowPolicies = ScreenCaptureTool.allCases.map {
+            ScreenshotSupport.unifiedCapturePolicy(
+                for: $0,
+                screenshotFreeze: true,
+                screenshotIncludePointer: false,
+                screenshotHideVorssaintWindows: true)
+        }
+        expect(hiddenWindowPolicies.allSatisfy(\.keepsContentWindowsOut),
+               "hiding Vorssaint windows keeps editors and pins out of every tool")
         expect(ScreenshotSupport.captureGuideIsVisible(pointerOnDisplay: true,
                                                        selectionInProgress: false,
                                                        capturePending: false)
@@ -20292,9 +20531,9 @@ struct MetricsTests {
         let settingsCode = mouseSettingsViewLines.filter(isCodeLine).joined()
             .filter { !$0.isWhitespace }
         expect(!settingsShortcutProperty.isEmpty && !settingsSpacesProperty.isEmpty
-                && settingsCode.contains("(\(settingsShortcutProperty)||\(settingsSpacesProperty))"
-                    + "&&AppFeature.mouseButtonShortcuts.isAvailable"),
-               "the Mouse permission section treats either mouse-button switch as engaged")
+                && settingsCode.contains("Form{Section(permissions.accessibility?"
+                    + "mousePointerText.permission:l10n.s.permissionRequired)"),
+               "Mouse & Trackpad keeps its Accessibility status and action visible at the top")
 
         let panelShortcutProperty = appStorageProperty(shortcutKey, in: menuPanelLines) ?? ""
         let panelSpacesProperty = appStorageProperty(spacesKey, in: menuPanelLines) ?? ""
@@ -21626,8 +21865,11 @@ struct MetricsTests {
                 && backupKeys.contains(DefaultsKey.panelControlMouseClickDebounce),
                "mouse click debounce preferences travel with the settings backup")
         expect(backupKeys.contains(DefaultsKey.mouseAccelerationDisabled)
+                && backupKeys.contains(DefaultsKey.mousePointerCustomized)
+                && backupKeys.contains(DefaultsKey.mousePointerAcceleration)
+                && backupKeys.contains(DefaultsKey.mousePointerSpeed)
                 && backupKeys.contains(DefaultsKey.panelControlMouseAcceleration),
-               "mouse acceleration preferences travel with the settings backup")
+               "mouse pointer preferences travel with the settings backup")
         expect(MouseExceptionScope.allCases.allSatisfy { backupKeys.contains($0.defaultsKey) },
                "the apps each mouse feature leaves alone travel with the settings backup")
         expect(backupKeys.contains(DefaultsKey.clipboardHistoryIgnoredApps),
@@ -24094,8 +24336,7 @@ struct MetricsTests {
         // The typing sampler fills an array from an NSEvent monitor callback
         // while the stop path reads it, so the append has to be under the
         // lock: an unsynchronised one races the copy-on-write buffer. The
-        // recording's start time is written by `start()` and read from that
-        // same callback, so it belongs under the lock too.
+        // recording's origin and pause state belong to its shared clock.
         let typingSampler = ((try? String(
             contentsOfFile: "Sources/Vorssaint/Services/Recorder/RecorderTypingTrack.swift",
             encoding: .utf8)) ?? "")
@@ -24103,10 +24344,8 @@ struct MetricsTests {
             .filter { !$0.isEmpty }.joined(separator: " ")
         expect(typingSampler.contains("let lock = NSLock()"),
                "the typing sampler guards its buffer the way the pointer sampler does")
-        expect(typingSampler.contains("lock.withLock { startedAt = CACurrentMediaTime() }"),
-               "the typing sampler writes the recording's start time under the lock")
         expect(typingSampler.contains(
-            "lock.withLock { guard let time = pauseClock.eventTime(now, since: startedAt) "
+            "lock.withLock { guard let time = pauseClock.eventTime(now) "
             + "else { return } times.append(time) }"
         ), "the typing sampler appends a keystroke time only under the lock")
         // `RecorderSession.stop()` is nonisolated and async, so its body runs
@@ -25919,6 +26158,43 @@ struct MetricsTests {
             encoding: .utf8)) ?? ""
         expect(mouseAccelerationSource.contains("SessionActivitySupport.isOnConsole("),
                "mouse acceleration shares the safe initial session-state fallback")
+        expect(mouseAccelerationSource.contains("kHIDUsage_GD_Mouse")
+                && mouseAccelerationSource.contains("kHIDUsage_GD_Pointer")
+                && mouseAccelerationSource.contains("IOHIDManagerSetDeviceMatchingMultiple"),
+               "mouse pointer changes reapply when either mouse- or pointer-usage HID devices reconnect")
+        let mouseSettingsSource = (try? String(
+            contentsOfFile: "Sources/Vorssaint/UI/Settings/SettingsView.swift",
+            encoding: .utf8)) ?? ""
+        let permissionSection = mouseSettingsSource.range(
+            of: "Form {\n            Section(permissions.accessibility")?.lowerBound
+        let scrollingSection = mouseSettingsSource.range(
+            of: "if AppFeature.scrollInverter.isAvailable")?.lowerBound
+        expect(permissionSection != nil && scrollingSection != nil
+                && permissionSection! < scrollingSection!,
+               "Mouse & Trackpad places its required Accessibility action before feature controls")
+        expect(mouseSettingsSource.contains("mousePointerService.connectedDevices")
+                && mouseSettingsSource.contains("mousePointerService.updateProfile")
+                && mouseSettingsSource.contains("mousePointerService.revertToSystemDefaults(for:")
+                && mouseSettingsSource.contains("ForEach(mousePointerService.connectedDevices)")
+                && mouseSettingsSource.contains("DisclosureGroup(isExpanded: pointerDeviceExpansionBinding")
+                && mouseSettingsSource.contains("mousePointerText.dpiNote"),
+               "Mouse & Trackpad exposes collapsible independent device controls and a per-device reset")
+        expect(mouseSettingsSource.contains("if smoothScroll.isRunning")
+                && mouseSettingsSource.contains("Label(mousePointerText.smoothActive"),
+               "smooth scrolling reports when its animated event path is active")
+        expect(AppLanguage.allCases.allSatisfy {
+            let pointer = FeatureStrings.mousePointer($0)
+            return !pointer.section.isEmpty && !pointer.customize.isEmpty
+                && !pointer.caption.isEmpty && !pointer.acceleration.isEmpty
+                && !pointer.trackingSpeed.isEmpty && !pointer.speed.isEmpty
+                && !pointer.revert.isEmpty && !pointer.dpiNote.isEmpty
+        }, "mouse pointer controls are complete in every supported language")
+        let thirdPartyNotices = (try? String(contentsOfFile: "THIRD_PARTY_NOTICES.md",
+                                             encoding: .utf8)) ?? ""
+        expect(thirdPartyNotices.contains("Copyright (c) 2021-2026 LinearMouse")
+                && thirdPartyNotices.contains("Copyright (C) 2020 Apple Inc.")
+                && buildScript.contains("cp THIRD_PARTY_NOTICES.md"),
+               "pointer-control notices are retained in source and packaged builds")
         for tapOwner in ["Sources/Vorssaint/Services/ScrollInverter.swift",
                          "Sources/Vorssaint/Services/SmoothScrollService.swift",
                          "Sources/Vorssaint/Services/MouseNavigation/MouseNavigationService.swift",

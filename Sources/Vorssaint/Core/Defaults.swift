@@ -47,6 +47,10 @@ enum DefaultsKey {
     static let smoothScrollEnabled = "smoothScrollEnabled"
     static let smoothScrollStep = "smoothScrollStep"      // pixels per wheel tick
     static let mouseAccelerationDisabled = "mouseAccelerationDisabled" // sets HIDMouseAcceleration to -1 for mice
+    static let mousePointerCustomized = "mousePointerCustomized"
+    static let mousePointerAcceleration = "mousePointerAcceleration" // 0...40 HID acceleration/tracking value
+    static let mousePointerSpeed = "mousePointerSpeed" // 0...1 software pointer speed
+    static let mousePointerDeviceProfiles = "mousePointerDeviceProfiles" // JSON keyed by stable HID identity
     static let smoothScrollResponse = "smoothScrollResponse" // 0...100, higher follows the wheel sooner
     static let mouseNavigationEnabled = "mouseNavigationEnabled" // side buttons trigger Back and Forward
     static let mouseButtonShortcutsEnabled = "mouseButtonShortcutsEnabled" // extra buttons press a key combination (issue #282)
@@ -672,6 +676,7 @@ enum DefaultsKey {
     static let notchDismissNativeNotifications = "notchDismissNativeNotifications"
     static let notchTimerEnabled = "notchTimerEnabled"
     static let notchTimerMode = "notchTimerMode"
+    static let notchTimerSoundEnabled = "notchTimerSoundEnabled"
     static let notchPomodoroFocusMinutes = "notchPomodoroFocusMinutes"
     static let notchPomodoroShortBreakMinutes = "notchPomodoroShortBreakMinutes"
     static let notchPomodoroLongBreakMinutes = "notchPomodoroLongBreakMinutes"
@@ -688,6 +693,9 @@ enum DefaultsKey {
     static let notchEnabled = "notchEnabled"
     static let notchDisplay = "notchDisplay"
     static let notchOpenOnHover = "notchOpenOnHover"
+    static let notchHoverDelay = "notchHoverDelay"
+    static let notchReturnHome = "notchReturnHome"
+    static let notchHomeModule = "notchHomeModule"
     static let notchHiddenModules = "notchHiddenModules"
     static let notchModuleOrder = "notchModuleOrder"
     static let notchQuickAccessLayout = "notchQuickAccessLayout"
@@ -941,6 +949,10 @@ enum Defaults {
         DefaultsKey.smoothScrollEnabled: false,
         DefaultsKey.smoothScrollStep: 40,
         DefaultsKey.mouseAccelerationDisabled: false,
+        DefaultsKey.mousePointerCustomized: false,
+        DefaultsKey.mousePointerAcceleration: MouseAccelerationSupport.defaultAcceleration,
+        DefaultsKey.mousePointerSpeed: MouseAccelerationSupport.defaultSpeed,
+        DefaultsKey.mousePointerDeviceProfiles: "{}",
         DefaultsKey.smoothScrollResponse: SmoothScrollSupport.defaultResponse,
         DefaultsKey.mouseNavigationEnabled: false,
         DefaultsKey.mouseButtonShortcutsEnabled: false,
@@ -1095,25 +1107,26 @@ enum Defaults {
         DefaultsKey.snippetLibraryEnabled: false,
         DefaultsKey.snippetLibraryShortcut: GlobalShortcut.snippetLibraryDefault.storageValue,
         DefaultsKey.notchShowPlayingMusic: true,
-        DefaultsKey.notchIdleContent: NotchIdleContent.none.rawValue,
+        DefaultsKey.notchIdleContent: NotchIdleContent.music.rawValue,
         DefaultsKey.notchHiddenControls: NotchControlItem.defaultHidden,
         DefaultsKey.notchControlOrder: "",
-        DefaultsKey.notchSize: NotchSize.compact.rawValue,
+        DefaultsKey.notchSize: NotchSize.spacious.rawValue,
         DefaultsKey.notchCustomWidth: NotchSize.defaultWidth,
         DefaultsKey.notchCustomHeight: NotchSize.defaultHeight,
-        DefaultsKey.notchHapticFeedback: false,
+        DefaultsKey.notchHapticFeedback: true,
         DefaultsKey.notchShelf: true,
         DefaultsKey.notchDragReveal: true,
         DefaultsKey.notchCaptureControls: true,
         DefaultsKey.notchQuickPanel: true,
         DefaultsKey.notchAppPanel: true,
-        DefaultsKey.notchHoverExpands: false,
-        DefaultsKey.notchGesturesEnabled: false,
+        DefaultsKey.notchHoverExpands: true,
+        DefaultsKey.notchGesturesEnabled: true,
         DefaultsKey.notchKeyboardLight: false,
         DefaultsKey.notchNotificationsEnabled: false,
         DefaultsKey.notchDismissNativeNotifications: false,
         DefaultsKey.notchTimerEnabled: true,
         DefaultsKey.notchTimerMode: NotchTimerMode.timer.rawValue,
+        DefaultsKey.notchTimerSoundEnabled: true,
         DefaultsKey.notchPomodoroFocusMinutes: 25,
         DefaultsKey.notchPomodoroShortBreakMinutes: 5,
         DefaultsKey.notchPomodoroLongBreakMinutes: 15,
@@ -1129,17 +1142,17 @@ enum Defaults {
         DefaultsKey.notchEnabled: false,
         DefaultsKey.notchDisplay: NotchDisplay.automatic.rawValue,
         DefaultsKey.notchOpenOnHover: true,
+        DefaultsKey.notchHoverDelay: NotchSupport.defaultHoverDelay,
+        DefaultsKey.notchReturnHome: false,
+        DefaultsKey.notchHomeModule: NotchModule.controls.rawValue,
         DefaultsKey.notchHiddenModules: "",
         DefaultsKey.notchModuleOrder: "",
         DefaultsKey.notchQuickAccessLayout: Data(),
-        DefaultsKey.notchQuickAccessSide: NotchQuickAccessSide.left.rawValue,
-        DefaultsKey.notchQuickAccessSecond: NotchQuickAction.settings.id,
-        DefaultsKey.notchQuickAccessThird: "",
         DefaultsKey.notchVolume: true,
         DefaultsKey.notchBrightness: true,
         DefaultsKey.notchBattery: true,
         DefaultsKey.notchClipboard: false,
-        DefaultsKey.notchClipboardWindow: false,
+        DefaultsKey.notchClipboardWindow: true,
         DefaultsKey.notchCapture: false,
         DefaultsKey.notchMusicActivity: false,
         DefaultsKey.notchShowInCaptures: true,
