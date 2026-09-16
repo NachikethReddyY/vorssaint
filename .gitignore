@@ -17,6 +17,8 @@ dist/
 AGENTS.md
 CLAUDE.md
 E2E/
+.evidence/
+artifacts/
 
 # macOS noise
 .DS_Store

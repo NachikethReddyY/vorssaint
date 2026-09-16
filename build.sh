@@ -300,6 +300,7 @@ if (( TEST )); then
         Sources/Vorssaint/Core/RecentCaptureStrings.swift
         Sources/Vorssaint/Core/RecorderStrings.swift
         Sources/Vorssaint/Core/RecorderShareStrings.swift
+        Sources/Vorssaint/Core/PrivacyScreenStrings.swift
         Sources/Vorssaint/Core/CameraPreviewStrings.swift
         Sources/Vorssaint/Core/ScratchpadStrings.swift
         Sources/Vorssaint/Core/FinderRenameStrings.swift
@@ -400,6 +401,7 @@ if (( TEST )); then
         Sources/Vorssaint/Core/DiskExclusionStrings.swift
         Sources/Vorssaint/Core/SwitcherAppRulesStrings.swift
         Sources/Vorssaint/Services/QuickTools/QuickToolsSupport.swift
+        Sources/Vorssaint/Services/QuickTools/PrivacyScreenSupport.swift
         Sources/Vorssaint/Services/CommandBar/CommandBarSupport.swift
         Sources/Vorssaint/Services/CommandBar/CommandBarPreferences.swift
         Sources/Vorssaint/Services/CommandBar/CommandBarMath.swift

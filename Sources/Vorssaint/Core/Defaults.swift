@@ -530,6 +530,9 @@ enum DefaultsKey {
     static let panelUtilityScreenOCR = "panelUtilityScreenOCR"
     static let panelUtilityCameraPreview = "panelUtilityCameraPreview"
     static let panelUtilityScratchpad = "panelUtilityScratchpad"
+    static let privacyScreenShortcutEnabled = "privacyScreenShortcutEnabled"
+    static let privacyScreenShortcut = "privacyScreenShortcut"
+    static let privacyScreenMessage = "privacyScreenMessage"
     static let clipboardHistoryShortcutEnabled = "clipboardHistoryShortcutEnabled"
     static let clipboardHistoryShortcut = "clipboardHistoryShortcut"
     // Mode chooser visibility for dedicated capture shortcuts.
@@ -1409,6 +1412,9 @@ enum Defaults {
         DefaultsKey.panelUtilityScreenOCR: true,
         DefaultsKey.panelUtilityCameraPreview: true,
         DefaultsKey.panelUtilityScratchpad: true,
+        DefaultsKey.privacyScreenShortcutEnabled: true,
+        DefaultsKey.privacyScreenShortcut: GlobalShortcut.privacyScreenDefault.storageValue,
+        DefaultsKey.privacyScreenMessage: PrivacyScreenSupport.defaultMessage,
         DefaultsKey.clipboardHistoryShortcutEnabled: true,
         DefaultsKey.clipboardHistoryShortcut: GlobalShortcut.clipboardDefault.storageValue,
         DefaultsKey.recorderShortcutEnabled: false,

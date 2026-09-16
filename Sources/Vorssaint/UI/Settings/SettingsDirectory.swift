@@ -224,6 +224,14 @@ enum SettingsDirectory {
                                                  FeatureStrings.commandBar(language).searchPlaceholder,
                                                  FeatureStrings.commandBar(language).appCenterTitle,
                                                  FeatureStrings.commandBar(language).appAliasLabel]),
+                SettingsDirectoryItem(page: .privacyScreen,
+                                      title: FeatureStrings.privacyScreen(language).title,
+                                      icon: "eye.slash.fill",
+                                      featureKeywords: [
+                                        (.privacyScreen, [FeatureStrings.privacyScreen(language).enabled,
+                                                          FeatureStrings.privacyScreen(language).messageLabel,
+                                                          FeatureStrings.privacyScreen(language).caption]),
+                                      ]),
                 SettingsDirectoryItem(page: .quickTools, title: s.quickToolsTab, icon: "wand.and.rays",
                                        featureKeywords: [
                                         (.quickLauncher, [s.launcherName]),

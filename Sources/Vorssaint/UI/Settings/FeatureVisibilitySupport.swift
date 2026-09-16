@@ -8,7 +8,7 @@ import Foundation
 /// below and the unit tests can reason about pages without pulling UI in.
 enum SettingsPage: Hashable {
     case general, features, energy, monitor
-    case mouse, switcher, keyDebounce, superKey, cutPaste, autoQuit, quitProtection, cleaner, uninstaller, urlCleaner, homebrew, appUpdates, media, clipboard, windowLayout, shelf, quickTools, textSnippets, screenshot, radialMenu, commandBar, killProcess, notch
+    case mouse, switcher, keyDebounce, superKey, cutPaste, autoQuit, quitProtection, cleaner, uninstaller, urlCleaner, homebrew, appUpdates, media, clipboard, windowLayout, shelf, privacyScreen, quickTools, textSnippets, screenshot, radialMenu, commandBar, killProcess, notch
     case shortcuts, advanced, about, releaseNotes, support
 }
 
@@ -39,6 +39,7 @@ enum SettingsSectionAnchor: String, CaseIterable, Hashable {
     case pastePlain
     case quickLauncher
     case quickToggles
+    case privacyScreen
     case screenshot
     case screenRecorder
     case colorPicker
@@ -60,6 +61,7 @@ enum SettingsSectionAnchor: String, CaseIterable, Hashable {
         case .switcher, .dock, .dockClick: return .switcher
         case .finderCutPaste, .finderRename: return .cutPaste
         case .clipboardHistory, .pastePlain: return .clipboard
+        case .privacyScreen: return .privacyScreen
         case .quickLauncher, .quickToggles, .micMute, .cameraPreview, .scratchpad, .cleaningMode:
             return .quickTools
         case .screenshot, .screenRecorder, .colorPicker, .screenOCR:
@@ -222,6 +224,8 @@ extension AppFeature {
             return FeatureSettingsDestination(.quickTools, sectionAnchor: .quickLauncher)
         case .quickToggles:
             return FeatureSettingsDestination(.quickTools, sectionAnchor: .quickToggles)
+        case .privacyScreen:
+            return FeatureSettingsDestination(.privacyScreen, sectionAnchor: .privacyScreen)
         case .colorPicker:
             return FeatureSettingsDestination(.screenshot, sectionAnchor: .colorPicker)
         case .screenOCR:
@@ -278,6 +282,7 @@ enum FeatureVisibilitySupport {
         case .cutPaste: return [.finderCutPaste, .finderRename]
         case .shelf: return [.shelf]
         case .media: return [.mediaTools]
+        case .privacyScreen: return [.privacyScreen]
         case .quickTools: return [.quickLauncher, .quickToggles, .micMute,
                                   .cameraPreview, .scratchpad, .cleaningMode]
         case .urlCleaner: return [.urlCleaner]

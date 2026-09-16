@@ -1,7 +1,114 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AppKit
 import SwiftUI
+
+struct PrivacyScreenSettings: View {
+    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var privacyScreen = PrivacyScreenService.shared
+    @AppStorage(DefaultsKey.privacyScreenShortcutEnabled) private var shortcutEnabled = true
+    @AppStorage(DefaultsKey.privacyScreenMessage) private var message = PrivacyScreenSupport.defaultMessage
+    @FocusState private var messageIsFocused: Bool
+
+    var body: some View {
+        let text = FeatureStrings.privacyScreen(l10n.language)
+        Form {
+            Section {
+                Text(text.caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle(text.enabled, isOn: $shortcutEnabled)
+                    .onChange(of: shortcutEnabled) { _, _ in
+                        privacyScreen.syncWithPreferences()
+                    }
+                ShortcutPreferenceRow(role: .privacyScreen, isEnabled: shortcutEnabled) {
+                    privacyScreen.syncWithPreferences()
+                }
+                if shortcutEnabled, privacyScreen.shortcutRegistrationFailed {
+                    Text(l10n.s.shortcutUnavailable)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                TextField(text.messageLabel, text: $message,
+                          prompt: Text(text.messagePlaceholder))
+                    .focused($messageIsFocused)
+                    .onSubmit { messageIsFocused = false }
+                    .onExitCommand { messageIsFocused = false }
+                    .onChange(of: message) { _, value in
+                        let bounded = PrivacyScreenSupport.editingMessage(from: value)
+                        if bounded != value {
+                            message = bounded
+                        }
+                        privacyScreen.messageDidChange()
+                    }
+                Text(text.messageCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Label(text.sharingBoundary, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text(text.title)
+            }
+            .settingsSectionAnchor(.privacyScreen)
+        }
+        .formStyle(.grouped)
+        .background(ClickAwayFocusDismissalView())
+    }
+}
+
+private struct ClickAwayFocusDismissalView: NSViewRepresentable {
+    func makeNSView(context: Context) -> FocusDismissalView {
+        FocusDismissalView()
+    }
+
+    func updateNSView(_ nsView: FocusDismissalView, context: Context) {}
+
+    final class FocusDismissalView: NSView {
+        private var clickMonitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                removeClickMonitor()
+            } else if clickMonitor == nil {
+                clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown]) {
+                    [weak self] event in
+                    guard let window = self?.window,
+                          event.window === window,
+                          let editor = window.firstResponder as? NSTextView,
+                          let textField = editor.delegate as? NSTextField else {
+                        return event
+                    }
+                    if event.type == .keyDown, event.keyCode == 53 {
+                        DispatchQueue.main.async {
+                            window.makeFirstResponder(nil)
+                        }
+                        return nil
+                    }
+                    guard event.type == .leftMouseDown else { return event }
+                    let location = textField.convert(event.locationInWindow, from: nil)
+                    guard !textField.bounds.contains(location) else { return event }
+                    DispatchQueue.main.async {
+                        window.makeFirstResponder(nil)
+                    }
+                    return event
+                }
+            }
+        }
+
+        deinit {
+            removeClickMonitor()
+        }
+
+        private func removeClickMonitor() {
+            guard let clickMonitor else { return }
+            NSEvent.removeMonitor(clickMonitor)
+            self.clickMonitor = nil
+        }
+    }
+}
 
 struct QuickToolsSettings: View {
     @Environment(\.colorScheme) private var colorScheme
