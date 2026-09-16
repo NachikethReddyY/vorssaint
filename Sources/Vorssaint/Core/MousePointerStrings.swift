@@ -8,7 +8,6 @@ import Foundation
 /// the project's localization workflow rather than duplicated Swift literals.
 struct MousePointerStrings {
     let section = "Pointer"
-    let device = "Device"
     let mouse = "Mouse"
     let trackpad = "Trackpad"
     let noDevices = "No supported pointer devices are connected."
@@ -21,6 +20,11 @@ struct MousePointerStrings {
     let revert = "Revert this device to system defaults"
     let dpiNote = "This changes macOS pointer scaling, not hardware DPI."
     let permissionCaption = "Accessibility is required for scrolling and button controls. Pointer speed does not require it."
+    let permission = "Permission"
+    let allMice = "All mice"
+    let allMiceCaption = "These controls apply to every connected mouse, not trackpads."
+    let trackpadControls = "Trackpad"
+    let smoothActive = "Smooth scrolling is active now"
 }
 
 extension FeatureStrings {

@@ -15112,6 +15112,17 @@ struct MetricsTests {
         expect(locationOnlyMouseIdentity.preferenceKey
                 == "location|1|2|3|USB",
                "a device without a serial keeps an independent port-scoped pointer profile")
+        let builtInTrackpadIdentity = MouseAccelerationDeviceIdentity(
+            vendorID: 0,
+            productID: 0,
+            locationID: 228,
+            transport: "FIFO",
+            physicalUniqueID: nil,
+            serialNumber: nil
+        )
+        expect(builtInTrackpadIdentity.preferenceKey(fallbackName: "Apple Internal Keyboard / Trackpad")
+                == "location|0|0|228|FIFO|APPLEINTERNALKEYBOARDTRACKPAD",
+               "a built-in trackpad with zero USB ids still receives a stable per-device profile")
         let anonymousMouseIdentity = MouseAccelerationDeviceIdentity(
             vendorID: nil,
             productID: nil,
@@ -20517,9 +20528,9 @@ struct MetricsTests {
         let settingsCode = mouseSettingsViewLines.filter(isCodeLine).joined()
             .filter { !$0.isWhitespace }
         expect(!settingsShortcutProperty.isEmpty && !settingsSpacesProperty.isEmpty
-                && settingsCode.contains("privatevaraccessibilityNoteVisible:Bool{"
-                    + "!permissions.accessibility}"),
-               "Mouse & Trackpad keeps its Accessibility action visible at the top until granted")
+                && settingsCode.contains("Form{Section(permissions.accessibility?"
+                    + "mousePointerText.permission:l10n.s.permissionRequired)"),
+               "Mouse & Trackpad keeps its Accessibility status and action visible at the top")
 
         let panelShortcutProperty = appStorageProperty(shortcutKey, in: menuPanelLines) ?? ""
         let panelSpacesProperty = appStorageProperty(spacesKey, in: menuPanelLines) ?? ""
@@ -26152,7 +26163,7 @@ struct MetricsTests {
             contentsOfFile: "Sources/Vorssaint/UI/Settings/SettingsView.swift",
             encoding: .utf8)) ?? ""
         let permissionSection = mouseSettingsSource.range(
-            of: "if accessibilityNoteVisible {\n                Section(l10n.s.permissionRequired)")?.lowerBound
+            of: "Form {\n            Section(permissions.accessibility")?.lowerBound
         let scrollingSection = mouseSettingsSource.range(
             of: "if AppFeature.scrollInverter.isAvailable")?.lowerBound
         expect(permissionSection != nil && scrollingSection != nil
@@ -26161,8 +26172,13 @@ struct MetricsTests {
         expect(mouseSettingsSource.contains("mousePointerService.connectedDevices")
                 && mouseSettingsSource.contains("mousePointerService.updateProfile")
                 && mouseSettingsSource.contains("mousePointerService.revertToSystemDefaults(for:")
+                && mouseSettingsSource.contains("ForEach(mousePointerService.connectedDevices)")
+                && mouseSettingsSource.contains("DisclosureGroup(isExpanded: pointerDeviceExpansionBinding")
                 && mouseSettingsSource.contains("mousePointerText.dpiNote"),
-               "Mouse & Trackpad exposes independent connected-device controls and a per-device reset")
+               "Mouse & Trackpad exposes collapsible independent device controls and a per-device reset")
+        expect(mouseSettingsSource.contains("if smoothScroll.isRunning")
+                && mouseSettingsSource.contains("Label(mousePointerText.smoothActive"),
+               "smooth scrolling reports when its animated event path is active")
         expect(AppLanguage.allCases.allSatisfy {
             let pointer = FeatureStrings.mousePointer($0)
             return !pointer.section.isEmpty && !pointer.customize.isEmpty

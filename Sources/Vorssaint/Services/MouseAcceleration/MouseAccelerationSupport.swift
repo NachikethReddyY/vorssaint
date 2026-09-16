@@ -33,6 +33,10 @@ struct MouseAccelerationDeviceIdentity: Codable, Equatable {
     /// Stable preference identity. Runtime registry IDs are intentionally not
     /// persisted because IOKit can assign a different one after reconnecting.
     var preferenceKey: String? {
+        preferenceKey(fallbackName: nil)
+    }
+
+    func preferenceKey(fallbackName: String?) -> String? {
         let vendor = vendorID ?? 0
         let product = productID ?? 0
         if let serial = Self.normalizedIdentifier(serialNumber) {
@@ -41,8 +45,12 @@ struct MouseAccelerationDeviceIdentity: Codable, Equatable {
         if let physical = Self.normalizedIdentifier(physicalUniqueID) {
             return "physical|\(vendor)|\(product)|\(physical)"
         }
-        if vendor > 0, product > 0, let locationID, locationID > 0 {
-            return "location|\(vendor)|\(product)|\(locationID)|\(transport ?? "")"
+        if let locationID, locationID > 0 {
+            let base = "location|\(vendor)|\(product)|\(locationID)|\(transport ?? "")"
+            if vendor > 0, product > 0 { return base }
+            if let name = Self.normalizedIdentifier(fallbackName) {
+                return "\(base)|\(name)"
+            }
         }
         return nil
     }

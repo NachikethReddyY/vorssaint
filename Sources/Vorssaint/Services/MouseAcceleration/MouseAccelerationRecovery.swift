@@ -122,11 +122,11 @@ enum MouseAccelerationRecovery {
 
     static func descriptor(of service: IOHIDServiceClient) -> MousePointerDeviceDescriptor? {
         guard let registryID = registryID(of: service),
-              let identity = identity(of: service),
-              let preferenceKey = identity.preferenceKey else { return nil }
+              let identity = identity(of: service) else { return nil }
         let name = stringProperty("Product", of: service)
             ?? stringProperty("ProductName", of: service)
             ?? (isTrackpad(service) ? "Trackpad" : "Mouse")
+        guard let preferenceKey = identity.preferenceKey(fallbackName: name) else { return nil }
         return MousePointerDeviceDescriptor(
             id: preferenceKey,
             registryID: registryID,

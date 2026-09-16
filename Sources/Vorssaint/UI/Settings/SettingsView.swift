@@ -915,7 +915,6 @@ struct MouseSettings: View {
         FocusFollowsMouseSupport.defaultDelayMilliseconds
     @AppStorage(DefaultsKey.smoothScrollEnabled) private var smoothScrollEnabled = false
     @AppStorage(DefaultsKey.smoothScrollStep) private var smoothScrollStep = SmoothScrollSupport.defaultStep
-    @AppStorage(DefaultsKey.mousePointerSelectedDeviceID) private var selectedPointerDeviceID = ""
     @AppStorage(DefaultsKey.smoothScrollResponse) private var smoothScrollResponse =
         SmoothScrollSupport.defaultResponse
     @AppStorage(DefaultsKey.mouseNavigationEnabled) private var mouseNavigationEnabled = false
@@ -928,6 +927,8 @@ struct MouseSettings: View {
         Defaults.defaultMouseClickDebounceWindowMs
     @State private var smoothScrollMoreOptionsExpanded = false
     @State private var mouseClickDebounceMoreOptionsExpanded = false
+    @State private var expandedPointerDeviceIDs: Set<String> = []
+    @State private var initializedPointerDeviceExpansion = false
 
     private var mouseClickDebounceText: MouseClickDebounceStrings {
         FeatureStrings.mouseClickDebounce(l10n.language)
@@ -939,13 +940,11 @@ struct MouseSettings: View {
 
     var body: some View {
         Form {
-            if accessibilityNoteVisible {
-                Section(l10n.s.permissionRequired) {
-                    Text(mousePointerText.permissionCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    PermissionRow(kind: .accessibility, showsStartOver: true)
-                }
+            Section(permissions.accessibility ? mousePointerText.permission : l10n.s.permissionRequired) {
+                Text(mousePointerText.permissionCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                PermissionRow(kind: .accessibility, showsStartOver: true)
             }
             if AppFeature.scrollInverter.isAvailable {
                 Section(l10n.s.scrollSection) {
@@ -1014,6 +1013,11 @@ struct MouseSettings: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if smoothScrollEnabled {
+                        if smoothScroll.isRunning {
+                            Label(mousePointerText.smoothActive, systemImage: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
                         HStack {
                             Slider(value: smoothScrollStepBinding,
                                    in: Double(SmoothScrollSupport.stepRange.lowerBound)...Double(SmoothScrollSupport.stepRange.upperBound),
@@ -1055,55 +1059,35 @@ struct MouseSettings: View {
                     if mousePointerService.connectedDevices.isEmpty {
                         Text(mousePointerText.noDevices)
                             .foregroundStyle(.secondary)
-                    } else if let device = selectedPointerDevice {
-                        Picker(mousePointerText.device, selection: selectedPointerDeviceBinding) {
-                            ForEach(mousePointerService.connectedDevices) { candidate in
-                                Text(deviceLabel(candidate)).tag(candidate.id)
-                            }
-                        }
-                        Toggle(mousePointerText.customize, isOn: selectedPointerEnabledBinding)
-                        if selectedPointerProfile.isEnabled {
-                            Toggle(mousePointerText.disableAcceleration,
-                                   isOn: selectedPointerDisablesAccelerationBinding)
-                        HStack {
-                            Slider(value: mousePointerAccelerationBinding,
-                                   in: MouseAccelerationSupport.accelerationRange,
-                                   step: 0.0625) {
-                                Text(selectedPointerProfile.disablesAcceleration
-                                     ? mousePointerText.trackingSpeed
-                                     : mousePointerText.acceleration)
-                            }
-                            Text(pointerValue(selectedPointerProfile.acceleration))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 52, alignment: .trailing)
-                        }
-                        if !selectedPointerProfile.disablesAcceleration {
-                            HStack {
-                                Slider(value: mousePointerSpeedBinding,
-                                       in: MouseAccelerationSupport.speedRange,
-                                       step: 0.01) {
-                                    Text(mousePointerText.speed)
+                    } else {
+                        ForEach(mousePointerService.connectedDevices) { device in
+                            DisclosureGroup(isExpanded: pointerDeviceExpansionBinding(device.id)) {
+                                pointerControls(for: device)
+                                    .padding(.top, 4)
+                            } label: {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(device.name)
+                                        Text(deviceDetail(device))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } icon: {
+                                    Image(systemName: device.kind == .trackpad
+                                          ? "rectangle.and.hand.point.up.left"
+                                          : "computermouse")
                                 }
-                                Text(pointerValue(selectedPointerProfile.speed))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 52, alignment: .trailing)
                             }
-                        }
-                        Button(mousePointerText.revert) {
-                            mousePointerService.revertToSystemDefaults(for: device.id)
-                        }
-                        Text(mousePointerText.dpiNote)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         }
                     }
                 }
                 .settingsSectionAnchor(.mouseAcceleration)
             }
             if AppFeature.mouseNavigation.isAvailable {
-                Section(l10n.s.mouseNavigationSection) {
+                Section(mousePointerText.allMice) {
+                    Text(mousePointerText.allMiceCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Toggle(l10n.s.mouseNavigationEnable, isOn: $mouseNavigationEnabled)
                         .onChange(of: mouseNavigationEnabled) { _, enabled in
                             MouseNavigationService.shared.syncWithPreferences()
@@ -1156,7 +1140,7 @@ struct MouseSettings: View {
                 .settingsSectionAnchor(.mouseClickDebounce)
             }
             if AppFeature.middleClick.isAvailable {
-                Section(l10n.s.middleClickSection) {
+                Section(mousePointerText.trackpadControls) {
                     Toggle(l10n.s.middleClickEnable, isOn: $middleClickEnabled)
                         .onChange(of: middleClickEnabled) { _, enabled in
                             MiddleClickService.shared.syncWithPreferences()
@@ -1194,21 +1178,15 @@ struct MouseSettings: View {
         .onAppear {
             MiddleClickService.shared.refreshDragGestureConflict()
             mousePointerService.setSettingsVisible(true)
-            selectAvailablePointerDevice()
+            initializePointerDeviceExpansion()
             if !permissions.accessibility { permissions.requestAccessibility() }
         }
         .onDisappear {
             mousePointerService.setSettingsVisible(false)
         }
         .onChange(of: mousePointerService.connectedDevices) { _, _ in
-            selectAvailablePointerDevice()
+            initializePointerDeviceExpansion()
         }
-    }
-
-    /// Only features that are on AND still available can ask for the
-    /// permission note; a hub-disabled one no longer needs anything.
-    private var accessibilityNoteVisible: Bool {
-        !permissions.accessibility
     }
 
     private var scrollDirectionEnabled: Bool {
@@ -1229,11 +1207,12 @@ struct MouseSettings: View {
         )
     }
 
-    private var mousePointerAccelerationBinding: Binding<Double> {
+    private func mousePointerAccelerationBinding(for device: MousePointerDeviceDescriptor)
+        -> Binding<Double> {
         Binding(
-            get: { selectedPointerProfile.acceleration },
+            get: { mousePointerService.profile(for: device.id).acceleration },
             set: { value in
-                updateSelectedPointerProfile { profile in
+                updatePointerProfile(for: device) { profile in
                     profile.acceleration = MouseAccelerationSupport.sanitizedAcceleration(value)
                     profile.isEnabled = true
                 }
@@ -1241,44 +1220,33 @@ struct MouseSettings: View {
         )
     }
 
-    private var selectedPointerDevice: MousePointerDeviceDescriptor? {
-        mousePointerService.connectedDevices.first { $0.id == selectedPointerDeviceID }
-            ?? mousePointerService.connectedDevices.first
-    }
-
-    private var selectedPointerProfile: MousePointerProfile {
+    private func pointerProfile(for device: MousePointerDeviceDescriptor) -> MousePointerProfile {
         _ = mousePointerService.profileRevision
-        guard let device = selectedPointerDevice else { return .disabled }
         return mousePointerService.profile(for: device.id)
     }
 
-    private var selectedPointerDeviceBinding: Binding<String> {
-        Binding(
-            get: { selectedPointerDevice?.id ?? "" },
-            set: { selectedPointerDeviceID = $0 }
-        )
-    }
-
-    private var selectedPointerEnabledBinding: Binding<Bool> {
-        Binding(get: { selectedPointerProfile.isEnabled }, set: { enabled in
-            updateSelectedPointerProfile { $0.isEnabled = enabled }
+    private func pointerEnabledBinding(for device: MousePointerDeviceDescriptor) -> Binding<Bool> {
+        Binding(get: { pointerProfile(for: device).isEnabled }, set: { enabled in
+            updatePointerProfile(for: device) { $0.isEnabled = enabled }
         })
     }
 
-    private var selectedPointerDisablesAccelerationBinding: Binding<Bool> {
-        Binding(get: { selectedPointerProfile.disablesAcceleration }, set: { disabled in
-            updateSelectedPointerProfile {
+    private func pointerDisablesAccelerationBinding(for device: MousePointerDeviceDescriptor)
+        -> Binding<Bool> {
+        Binding(get: { pointerProfile(for: device).disablesAcceleration }, set: { disabled in
+            updatePointerProfile(for: device) {
                 $0.disablesAcceleration = disabled
                 $0.isEnabled = true
             }
         })
     }
 
-    private var mousePointerSpeedBinding: Binding<Double> {
+    private func mousePointerSpeedBinding(for device: MousePointerDeviceDescriptor)
+        -> Binding<Double> {
         Binding(
-            get: { selectedPointerProfile.speed },
+            get: { pointerProfile(for: device).speed },
             set: { value in
-                updateSelectedPointerProfile { profile in
+                updatePointerProfile(for: device) { profile in
                     profile.speed = MouseAccelerationSupport.sanitizedSpeed(value)
                     profile.isEnabled = true
                 }
@@ -1286,26 +1254,76 @@ struct MouseSettings: View {
         )
     }
 
-    private func updateSelectedPointerProfile(_ update: (inout MousePointerProfile) -> Void) {
-        guard let device = selectedPointerDevice else { return }
+    private func updatePointerProfile(for device: MousePointerDeviceDescriptor,
+                                      _ update: (inout MousePointerProfile) -> Void) {
         var profile = mousePointerService.profile(for: device.id)
         update(&profile)
         mousePointerService.updateProfile(profile, for: device.id)
     }
 
-    private func selectAvailablePointerDevice() {
-        guard !mousePointerService.connectedDevices.contains(where: {
-            $0.id == selectedPointerDeviceID
-        }) else { return }
-        selectedPointerDeviceID = mousePointerService.connectedDevices.first?.id ?? ""
+    private func pointerDeviceExpansionBinding(_ deviceID: String) -> Binding<Bool> {
+        Binding(get: { expandedPointerDeviceIDs.contains(deviceID) }, set: { expanded in
+            if expanded {
+                expandedPointerDeviceIDs.insert(deviceID)
+            } else {
+                expandedPointerDeviceIDs.remove(deviceID)
+            }
+        })
     }
 
-    private func deviceLabel(_ device: MousePointerDeviceDescriptor) -> String {
+    private func initializePointerDeviceExpansion() {
+        guard !initializedPointerDeviceExpansion,
+              !mousePointerService.connectedDevices.isEmpty else { return }
+        initializedPointerDeviceExpansion = true
+        expandedPointerDeviceIDs = Set(mousePointerService.connectedDevices.map(\.id))
+    }
+
+    private func deviceDetail(_ device: MousePointerDeviceDescriptor) -> String {
         let kind = device.kind == .trackpad ? mousePointerText.trackpad : mousePointerText.mouse
-        guard let transport = device.transport, !transport.isEmpty else {
-            return "\(device.name) — \(kind)"
+        guard let transport = device.transport, !transport.isEmpty else { return kind }
+        return "\(kind), \(transport)"
+    }
+
+    @ViewBuilder
+    private func pointerControls(for device: MousePointerDeviceDescriptor) -> some View {
+        let profile = pointerProfile(for: device)
+        Toggle(mousePointerText.customize, isOn: pointerEnabledBinding(for: device))
+        if profile.isEnabled {
+            Toggle(mousePointerText.disableAcceleration,
+                   isOn: pointerDisablesAccelerationBinding(for: device))
+            HStack {
+                Slider(value: mousePointerAccelerationBinding(for: device),
+                       in: MouseAccelerationSupport.accelerationRange,
+                       step: 0.0625) {
+                    Text(profile.disablesAcceleration
+                         ? mousePointerText.trackingSpeed
+                         : mousePointerText.acceleration)
+                }
+                Text(pointerValue(profile.acceleration))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 52, alignment: .trailing)
+            }
+            if !profile.disablesAcceleration {
+                HStack {
+                    Slider(value: mousePointerSpeedBinding(for: device),
+                           in: MouseAccelerationSupport.speedRange,
+                           step: 0.01) {
+                        Text(mousePointerText.speed)
+                    }
+                    Text(pointerValue(profile.speed))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 52, alignment: .trailing)
+                }
+            }
+            Button(mousePointerText.revert) {
+                mousePointerService.revertToSystemDefaults(for: device.id)
+            }
+            Text(mousePointerText.dpiNote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        return "\(device.name) — \(kind), \(transport)"
     }
 
     private func pointerValue(_ value: Double) -> String {
