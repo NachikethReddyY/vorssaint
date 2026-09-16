@@ -18,6 +18,26 @@ struct PrivacyScreenSettings: View {
                 Text(text.caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if privacyScreen.hasShareWindow {
+                    Label(privacyScreen.captureError == nil
+                            ? "Vorssaint Privacy Source is ready in window pickers"
+                            : "Privacy Source is unavailable — check Screen Recording permission",
+                          systemImage: privacyScreen.captureError == nil
+                            ? "rectangle.on.rectangle"
+                            : "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(privacyScreen.captureError == nil
+                            ? Color.secondary
+                            : Color.orange)
+                }
+                Button {
+                    privacyScreen.chooseSource()
+                } label: {
+                    Label("Choose screen or window", systemImage: "rectangle.on.rectangle.angled")
+                }
+                Text("This chooses what Vorssaint mirrors. In the meeting or recorder, share ‘Vorssaint Privacy Source’. ")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 Toggle(text.enabled, isOn: $shortcutEnabled)
                     .onChange(of: shortcutEnabled) { _, _ in
                         privacyScreen.syncWithPreferences()

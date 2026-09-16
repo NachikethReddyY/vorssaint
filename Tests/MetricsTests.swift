@@ -24194,9 +24194,10 @@ struct MetricsTests {
         expect(typingSampler.contains("let lock = NSLock()"),
                "the typing sampler guards its buffer the way the pointer sampler does")
         expect(typingSampler.contains(
-            "lock.withLock { guard let time = pauseClock.eventTime(now) "
+            "lock.withLock { guard !privacyState.current().isActive else { return } "
+            + "guard let time = pauseClock.eventTime(now) "
             + "else { return } times.append(time) }"
-        ), "the typing sampler appends a keystroke time only under the lock")
+        ), "the typing sampler rechecks privacy and appends a keystroke time only under the lock")
         // `RecorderSession.stop()` is nonisolated and async, so its body runs
         // off the main thread however main-actor the caller was (SE-0338).
         // Both samplers install and remove AppKit event monitors, so they are

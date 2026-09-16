@@ -12,6 +12,9 @@ final class StatusItemController {
     var onMetricClick: ((MenuBarMetric, NSStatusBarButton) -> Void)?
 
     private(set) var statusItem: NSStatusItem!
+    /// A temporary, separate signal for the capture path. Keeping it distinct
+    /// from the app icon makes protected output unambiguous at a glance.
+    private var privacyStatusItem: NSStatusItem?
     private var metricStatusItems: [String: NSStatusItem] = [:]
     private var metricStatusItemFocus: [String: MenuBarMetric] = [:]
     private var cancellables = Set<AnyCancellable>()
@@ -156,6 +159,19 @@ final class StatusItemController {
             .sink { [weak self] _ in self?.updateIconAppearance() }
             .store(in: &cancellables)
 
+        PrivacyScreenService.shared.$hasShareWindow
+            .combineLatest(PrivacyScreenService.shared.$isActive,
+                           ScreenRecorderService.shared.$isRecording,
+                           ScreenRecorderService.shared.$privacyProtectionActive)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updatePrivacyStatusItem() }
+            .store(in: &cancellables)
+
+        PrivacyScreenService.shared.$captureError
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updatePrivacyStatusItem() }
+            .store(in: &cancellables)
+
         KeepAwakeManager.shared.$endDate
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refresh() }
@@ -207,6 +223,54 @@ final class StatusItemController {
         for item in metricStatusItems.values {
             NSStatusBar.system.removeStatusItem(item)
         }
+        if let privacyStatusItem { NSStatusBar.system.removeStatusItem(privacyStatusItem) }
+    }
+
+    private func updatePrivacyStatusItem() {
+        let share = PrivacyScreenService.shared
+        let recorder = ScreenRecorderService.shared
+        let hasError = share.hasShareWindow && share.captureError != nil
+        guard share.isActive || recorder.isRecording || hasError else {
+            if let item = privacyStatusItem {
+                NSStatusBar.system.removeStatusItem(item)
+                privacyStatusItem = nil
+            }
+            return
+        }
+
+        if privacyStatusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.autosaveName = "VorssaintPrivacyStatus"
+            item.behavior = [.removalAllowed]
+            item.button?.target = self
+            item.button?.action = #selector(privacyStatusClicked)
+            privacyStatusItem = item
+        }
+
+        let isProtected = share.isActive || recorder.privacyProtectionActive
+        let symbol: String
+        let label: String
+        if hasError {
+            symbol = "exclamationmark.triangle.fill"
+            label = "Privacy source unavailable"
+        } else if isProtected {
+            symbol = "eye.slash.fill"
+            label = recorder.isRecording
+                ? "Vorssaint recording output is blurred"
+                : "Vorssaint Privacy Source is blurred"
+        } else if recorder.isRecording {
+            symbol = "record.circle.fill"
+            label = "Vorssaint is recording — click to blur its output"
+        } else { return }
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        image?.isTemplate = true
+        privacyStatusItem?.button?.image = image
+        privacyStatusItem?.button?.toolTip = label
+        privacyStatusItem?.button?.setAccessibilityLabel(label)
+    }
+
+    @objc private func privacyStatusClicked() {
+        PrivacyScreenService.shared.toggle()
     }
 
     /// Keeps the background sampler in step with the menu bar settings: it runs

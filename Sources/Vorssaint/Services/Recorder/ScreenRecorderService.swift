@@ -43,6 +43,8 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
     private let streamHeard = RecorderAudioFlag()
     private let pointer: RecorderPointerSampler
     private let typing: RecorderTypingSampler
+    private let privacyState: RecorderPrivacyState
+    private let privacyRenderer = RecorderPrivacyFrameRenderer()
     private let writerQueue = DispatchQueue(label: "com.vorssaint.recorder.writer",
                                             qos: .userInitiated)
     private let startGate = RecorderStartGate()
@@ -57,7 +59,8 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
           region: RecorderSupport.Region,
           frameRate: Int,
           capturesSystemAudio: Bool,
-          capturesMicrophone: Bool) {
+          capturesMicrophone: Bool,
+          privacyState: RecorderPrivacyState) {
         guard let writer = RecorderWriter(url: take.videoURL,
                                           pixelSize: region.pixelSize,
                                           frameRate: frameRate,
@@ -69,9 +72,11 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
         self.region = region
         self.writer = writer
         self.capturesSystemAudio = capturesSystemAudio
+        self.privacyState = privacyState
         microphone = capturesMicrophone ? RecorderMicrophoneCapture() : nil
-        pointer = RecorderPointerSampler(region: region, pauseClock: pauseClock)
-        typing = RecorderTypingSampler(pauseClock: pauseClock)
+        pointer = RecorderPointerSampler(region: region, pauseClock: pauseClock,
+                                         privacyState: privacyState)
+        typing = RecorderTypingSampler(pauseClock: pauseClock, privacyState: privacyState)
         super.init()
         engine.delegate = self
         microphone?.onSample = { [weak self] sampleBuffer in
@@ -159,6 +164,18 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
 
     var isPaused: Bool { pauseClock.isPaused }
 
+    func setPrivacyProtection(_ active: Bool, message: String?) {
+        privacyState.update(isActive: active, message: message)
+        guard active else { return }
+        let transitionTime = CMClockGetTime(CMClockGetHostTimeClock())
+        let protectedMessage = privacyState.current().message
+        writerQueue.async { [writer, privacyRenderer] in
+            writer.appendPrivacyTransition(at: transitionTime) { sample in
+                privacyRenderer.render(sample, message: protectedMessage)
+            }
+        }
+    }
+
     func pause(at time: CFTimeInterval) -> Bool {
         pauseClock.pause(at: time)
     }
@@ -234,8 +251,25 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
     }
 
     private func append(_ sampleBuffer: CMSampleBuffer, kind: RecorderCaptureEngine.Kind) {
-        writerQueue.async { [writer] in
-            writer.append(sampleBuffer, kind: kind)
+        let privacyAtCapture = privacyState.current()
+        writerQueue.async { [writer, privacyState, privacyRenderer] in
+            guard kind == .video else {
+                writer.append(sampleBuffer, kind: kind)
+                return
+            }
+            let privacyNow = privacyState.current()
+            // Protect both sides of a transition: frames already queued when
+            // concealment begins and frames captured before reveal completes.
+            let shouldProtect = privacyAtCapture.isActive || privacyNow.isActive
+            guard shouldProtect else {
+                writer.append(sampleBuffer, kind: kind)
+                return
+            }
+            // SECURITY: never fall back to a raw frame after protection was
+            // requested. A render failure drops this frame instead.
+            let message = privacyNow.isActive ? privacyNow.message : privacyAtCapture.message
+            guard let protected = privacyRenderer.render(sampleBuffer, message: message) else { return }
+            writer.append(protected, kind: kind)
         }
     }
 }
@@ -252,6 +286,8 @@ final class ScreenRecorderService: ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var isPaused = false
     @Published private(set) var elapsedSeconds = 0
+    @Published private(set) var privacyProtectionActive = false
+    private let privacyState = RecorderPrivacyState()
     private var session: RecorderSession?
     private var indicator: RecorderIndicator?
     private var editors: [RecorderEditorController] = []
@@ -274,6 +310,22 @@ final class ScreenRecorderService: ObservableObject {
     }
 
     private init() {}
+
+    /// Changes the pixels saved by the active Vorssaint recorder. This does
+    /// not claim to control another app's independent screen capture.
+    @discardableResult
+    func setPrivacyProtection(_ active: Bool) -> Bool {
+        guard isRecording, let session else { return false }
+        let message = UserDefaults.standard.string(forKey: DefaultsKey.privacyScreenMessage)
+        session.setPrivacyProtection(active, message: message)
+        privacyProtectionActive = active
+        return true
+    }
+
+    @discardableResult
+    func togglePrivacyProtection() -> Bool {
+        setPrivacyProtection(!privacyProtectionActive)
+    }
 
     // MARK: - Preferences
 
@@ -468,7 +520,8 @@ final class ScreenRecorderService: ObservableObject {
                                             region: region,
                                             frameRate: frameRate,
                                             capturesSystemAudio: capturesSystemAudio,
-                                            capturesMicrophone: capturesMicrophone) else {
+                                            capturesMicrophone: capturesMicrophone,
+                                            privacyState: privacyState) else {
             indicator?.hide()
             indicator = nil
             RecorderTakeStore.shared.delete(take)
@@ -551,6 +604,8 @@ final class ScreenRecorderService: ObservableObject {
     }
 
     private func recordingDidStart() {
+        privacyState.update(isActive: false)
+        privacyProtectionActive = false
         isRecording = true
         isPaused = false
         elapsedSeconds = Int(session?.elapsed(at: CACurrentMediaTime()) ?? 0)
@@ -625,6 +680,8 @@ final class ScreenRecorderService: ObservableObject {
         Task { @MainActor [weak self] in
             let written = await session.stop()
             guard let self else { return }
+            self.privacyState.update(isActive: false)
+            self.privacyProtectionActive = false
             self.session = nil
             self.isFinishing = false
             if written {

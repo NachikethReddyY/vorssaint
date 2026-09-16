@@ -6,6 +6,16 @@ import Foundation
 /// Pure message policy for Privacy Share, kept separate so editing behavior
 /// can be tested without opening a real capture window.
 enum PrivacyScreenSupport {
+    enum HotkeyState: Equatable {
+        case idle
+        case sharing(isPrivate: Bool)
+    }
+
+    enum HotkeyAction: Equatable {
+        case none
+        case setPrivate(Bool)
+    }
+
     static let defaultMessage = "Screen hidden"
     static let maximumMessageLength = 280
     static let distortionStyle = DistortionStyle(
@@ -40,5 +50,12 @@ enum PrivacyScreenSupport {
     /// being edited removes the space before the user can type another word.
     static func editingMessage(from raw: String) -> String {
         String(raw.prefix(maximumMessageLength))
+    }
+
+    static func hotkeyAction(for state: HotkeyState) -> HotkeyAction {
+        switch state {
+        case .idle: return .none
+        case let .sharing(isPrivate): return .setPrivate(!isPrivate)
+        }
     }
 }

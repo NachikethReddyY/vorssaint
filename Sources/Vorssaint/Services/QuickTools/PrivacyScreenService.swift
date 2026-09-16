@@ -25,6 +25,8 @@ final class PrivacyScreenService: NSObject, ObservableObject, @unchecked Sendabl
     private var window: NSWindow?
     private var stream: SCStream?
     private var startTask: Task<Void, Never>?
+    private var shareGeneration: UInt64 = 0
+    private var observesSourcePicker = false
 
     private override init() {
         super.init()
@@ -38,49 +40,48 @@ final class PrivacyScreenService: NSObject, ObservableObject, @unchecked Sendabl
         let shortcut = GlobalShortcut.saved(for: DefaultsKey.privacyScreenShortcut,
                                             fallback: .privacyScreenDefault)
         shortcutRegistrationFailed = !hotkey.sync(enabled: enabled, shortcut: shortcut)
-        if !available { suspend() }
+        if enabled {
+            configureSourcePicker()
+            prepareShareSource()
+        } else {
+            disableSourcePicker()
+            dismissShareSession()
+        }
     }
 
     func suspend() {
         hotkey.unregister()
-        isActive = false
-        window?.close()
-        window = nil
-        hasShareWindow = false
-        stopCapture()
+        disableSourcePicker()
+        dismissShareSession()
     }
 
-    func openShareWindow() {
-        guard AppFeature.privacyScreen.isAvailable else { return }
-        if let window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 600),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                              backing: .buffered,
-                              defer: false)
-        window.title = "Privacy Share"
-        window.minSize = NSSize(width: 640, height: 400)
-        window.isReleasedWhenClosed = false
-        window.backgroundColor = .black
-        window.collectionBehavior = [.fullScreenPrimary]
-        window.sharingType = .readOnly
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: PrivacyShareWindowView(service: self))
-        window.center()
-        self.window = window
-        hasShareWindow = true
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        startCapture()
+    func chooseSource() {
+        guard #available(macOS 14.0, *), window != nil else { return }
+        configureSourcePicker()
+        let picker = SCContentSharingPicker.shared
+        picker.isActive = true
+        picker.present()
     }
 
     func toggle() {
-        if window == nil { openShareWindow() }
-        isActive.toggle()
+        let recorder = ScreenRecorderService.shared
+        if recorder.isRecording {
+            let shareIsPrivate = window != nil && isActive
+            let target = !(recorder.privacyProtectionActive || shareIsPrivate)
+            _ = recorder.setPrivacyProtection(target)
+            if window != nil { isActive = target }
+            return
+        }
+        let state: PrivacyScreenSupport.HotkeyState = window == nil
+            ? .idle
+            : .sharing(isPrivate: isActive)
+
+        switch PrivacyScreenSupport.hotkeyAction(for: state) {
+        case .none:
+            break
+        case let .setPrivate(value):
+            isActive = value
+        }
     }
 
     func messageDidChange() {
@@ -91,19 +92,108 @@ final class PrivacyScreenService: NSObject, ObservableObject, @unchecked Sendabl
         previewView = view
     }
 
+    private func configureSourcePicker() {
+        guard #available(macOS 14.0, *) else { return }
+        let picker = SCContentSharingPicker.shared
+        var configuration = picker.defaultConfiguration
+        configuration.allowedPickerModes = [.singleDisplay, .singleWindow]
+        configuration.excludedWindowIDs = window.map { [Int($0.windowNumber)] } ?? []
+        configuration.allowsChangingSelectedContent = true
+        picker.defaultConfiguration = configuration
+        picker.maximumStreamCount = 1
+        picker.isActive = false
+        if !observesSourcePicker {
+            picker.add(self)
+            observesSourcePicker = true
+        }
+    }
+
+    private func disableSourcePicker() {
+        guard #available(macOS 14.0, *), observesSourcePicker else { return }
+        let picker = SCContentSharingPicker.shared
+        picker.remove(self)
+        picker.isActive = false
+        observesSourcePicker = false
+    }
+
+    /// Keeps a stable, named window available to third-party sharing and
+    /// recording pickers. It never takes focus and stays behind ordinary work
+    /// while continuing to render for a meeting or recorder that selected it.
+    private func prepareShareSource() {
+        guard AppFeature.privacyScreen.isAvailable, window == nil else { return }
+        shareGeneration &+= 1
+        let displayFrame = NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        let targetSize = aspectFit(
+            source: NSSize(width: 16, height: 9),
+            inside: NSSize(width: displayFrame.width * 0.90,
+                           height: displayFrame.height * 0.90)
+        )
+        let sourceFrame = NSRect(
+            x: displayFrame.midX - targetSize.width / 2,
+            y: displayFrame.midY - targetSize.height / 2,
+            width: targetSize.width,
+            height: targetSize.height
+        )
+        let output = NSWindow(contentRect: sourceFrame,
+                              styleMask: [.titled, .fullSizeContentView],
+                              backing: .buffered,
+                              defer: false)
+        output.title = "Vorssaint Privacy Source"
+        output.titleVisibility = .hidden
+        output.titlebarAppearsTransparent = true
+        output.standardWindowButton(.closeButton)?.isHidden = true
+        output.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        output.standardWindowButton(.zoomButton)?.isHidden = true
+        output.isReleasedWhenClosed = false
+        output.backgroundColor = .black
+        output.isOpaque = true
+        output.hasShadow = false
+        // Third-party pickers commonly exclude desktop-layer windows. Keep a
+        // normal shareable window ordered behind work instead of floating it.
+        output.level = .normal
+        output.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        output.sharingType = .readOnly
+        output.ignoresMouseEvents = true
+        output.hidesOnDeactivate = false
+        output.delegate = self
+        output.contentView = NSHostingView(rootView: PrivacyShareWindowView(service: self))
+        window = output
+        isActive = false
+        hasShareWindow = true
+        output.orderBack(nil)
+        configureSourcePicker()
+        startCapture()
+    }
+
+    private func aspectFit(source: NSSize, inside bounds: NSSize) -> NSSize {
+        let scale = min(bounds.width / source.width, bounds.height / source.height)
+        return NSSize(width: floor(source.width * scale),
+                      height: floor(source.height * scale))
+    }
+
+    private func dismissShareSession() {
+        shareGeneration &+= 1
+        isActive = false
+        window?.close()
+        window = nil
+        hasShareWindow = false
+        stopCapture()
+    }
+
     private func startCapture() {
         guard stream == nil, startTask == nil else { return }
+        let generation = shareGeneration
         Permissions.shared.refresh()
-        guard Permissions.shared.screenRecording else {
-            captureError = "Allow Screen Recording to mirror a display into this share window."
-            Permissions.shared.requestScreenRecording()
-            return
-        }
-
         captureError = nil
         startTask = Task { [weak self] in
             guard let self else { return }
-            defer { DispatchQueue.main.async { self.startTask = nil } }
+            defer {
+                DispatchQueue.main.async {
+                    guard self.shareGeneration == generation else { return }
+                    self.startTask = nil
+                }
+            }
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(
                     false, onScreenWindowsOnly: true)
@@ -132,36 +222,68 @@ final class PrivacyScreenService: NSObject, ObservableObject, @unchecked Sendabl
                     filter = SCContentFilter(display: display, excludingWindows: ownWindows)
                 }
 
-                let configuration = SCStreamConfiguration()
-                configuration.width = display.width
-                configuration.height = display.height
-                configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
-                configuration.queueDepth = 3
-                configuration.pixelFormat = kCVPixelFormatType_32BGRA
-                configuration.colorSpaceName = CGColorSpace.sRGB
-                configuration.showsCursor = true
-                configuration.shouldBeOpaque = true
-                configuration.captureResolution = .best
-
-                let stream = SCStream(filter: filter, configuration: configuration,
-                                      delegate: self)
-                try stream.addStreamOutput(self, type: .screen,
-                                           sampleHandlerQueue: captureQueue)
-                try await stream.startCapture()
-                await MainActor.run {
-                    guard self.window != nil else {
-                        Task { try? await stream.stopCapture() }
-                        return
-                    }
-                    self.stream = stream
-                    self.isStreaming = true
-                }
+                try await startStream(with: filter, generation: generation)
             } catch {
                 await MainActor.run {
-                    self.captureError = "The display mirror could not start. Check Screen Recording permission and reopen the window."
+                    guard self.shareGeneration == generation else { return }
+                    self.captureError = "The display mirror could not start. Choose a source or check Screen Recording permission."
                     self.isStreaming = false
                 }
             }
+        }
+    }
+
+    private func replaceCaptureSource(with filter: SCContentFilter) {
+        shareGeneration &+= 1
+        let generation = shareGeneration
+        stopCapture()
+        captureError = nil
+        startTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                DispatchQueue.main.async {
+                    guard self.shareGeneration == generation else { return }
+                    self.startTask = nil
+                }
+            }
+            do {
+                try await self.startStream(with: filter, generation: generation)
+            } catch {
+                await MainActor.run {
+                    guard self.shareGeneration == generation else { return }
+                    self.captureError = "The selected source stopped. Choose a screen or window again."
+                    self.isStreaming = false
+                }
+            }
+        }
+    }
+
+    private func startStream(with filter: SCContentFilter,
+                             generation: UInt64) async throws {
+        let configuration = SCStreamConfiguration()
+        let pixelScale = Double(filter.pointPixelScale)
+        configuration.width = max(1, Int(filter.contentRect.width * pixelScale))
+        configuration.height = max(1, Int(filter.contentRect.height * pixelScale))
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        configuration.queueDepth = 3
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.colorSpaceName = CGColorSpace.sRGB
+        configuration.showsCursor = true
+        configuration.shouldBeOpaque = true
+        configuration.captureResolution = .best
+
+        let stream = SCStream(filter: filter, configuration: configuration,
+                              delegate: self)
+        try stream.addStreamOutput(self, type: .screen,
+                                   sampleHandlerQueue: captureQueue)
+        try await stream.startCapture()
+        await MainActor.run {
+            guard self.shareGeneration == generation, self.window != nil else {
+                Task { try? await stream.stopCapture() }
+                return
+            }
+            self.stream = stream
+            self.isStreaming = true
         }
     }
 
@@ -179,6 +301,7 @@ final class PrivacyScreenService: NSObject, ObservableObject, @unchecked Sendabl
 extension PrivacyScreenService: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === window else { return }
+        shareGeneration &+= 1
         window = nil
         hasShareWindow = false
         isActive = false
@@ -205,6 +328,30 @@ extension PrivacyScreenService: SCStreamOutput, SCStreamDelegate {
             self.stream = nil
             self.isStreaming = false
             self.captureError = "The display mirror stopped. Close and reopen Privacy Share to retry."
+        }
+    }
+}
+
+@available(macOS 14.0, *)
+extension PrivacyScreenService: SCContentSharingPickerObserver {
+    func contentSharingPicker(_ picker: SCContentSharingPicker,
+                              didUpdateWith filter: SCContentFilter,
+                              for stream: SCStream?) {
+        DispatchQueue.main.async { [weak self] in
+            picker.isActive = false
+            self?.replaceCaptureSource(with: filter)
+        }
+    }
+
+    func contentSharingPicker(_ picker: SCContentSharingPicker,
+                              didCancelFor stream: SCStream?) {
+        picker.isActive = false
+    }
+
+    func contentSharingPickerStartDidFailWithError(_ error: Error) {
+        DispatchQueue.main.async { [weak self] in
+            SCContentSharingPicker.shared.isActive = false
+            self?.captureError = "The source picker could not open. Try again from Privacy Share settings."
         }
     }
 }

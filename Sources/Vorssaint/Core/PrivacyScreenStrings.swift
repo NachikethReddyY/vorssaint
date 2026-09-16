@@ -16,34 +16,52 @@ struct PrivacyScreenFeatureStrings {
 
 extension FeatureStrings {
     static func privacyScreen(_ language: AppLanguage) -> PrivacyScreenFeatureStrings {
-        switch language {
-        case .enUS: return .enUS
-        case .ptBR: return .ptBR
-        case .tr: return .tr
-        case .ru: return .ru
-        case .es: return .es
-        case .de: return .de
-        case .fr: return .fr
-        case .it: return .it
-        case .ja: return .ja
-        case .ko: return .ko
-        case .zhHans: return .zhHans
-        case .zhTW: return .zhTW
-        case .zhHK: return .zhHK
+        let localized = switch language {
+        case .enUS: PrivacyScreenFeatureStrings.enUS
+        case .ptBR: PrivacyScreenFeatureStrings.ptBR
+        case .tr: PrivacyScreenFeatureStrings.tr
+        case .ru: PrivacyScreenFeatureStrings.ru
+        case .es: PrivacyScreenFeatureStrings.es
+        case .de: PrivacyScreenFeatureStrings.de
+        case .fr: PrivacyScreenFeatureStrings.fr
+        case .it: PrivacyScreenFeatureStrings.it
+        case .ja: PrivacyScreenFeatureStrings.ja
+        case .ko: PrivacyScreenFeatureStrings.ko
+        case .zhHans: PrivacyScreenFeatureStrings.zhHans
+        case .zhTW: PrivacyScreenFeatureStrings.zhTW
+        case .zhHK: PrivacyScreenFeatureStrings.zhHK
         }
+        // Keep translated labels while the new source-routing explanation is
+        // intentionally English until reviewed translations are available.
+        return localized.withSourceRoutingCopy()
+    }
+}
+
+private extension PrivacyScreenFeatureStrings {
+    func withSourceRoutingCopy() -> PrivacyScreenFeatureStrings {
+        PrivacyScreenFeatureStrings(
+            title: title,
+            hubDescription: "Create a shareable source that can blur without blocking your work",
+            enabled: enabled,
+            caption: "Vorssaint keeps a named Privacy Source ready. Select it in the window picker of Meet, Cap, Teams, or another sharing app, then use the shortcut to blur or reveal only that output.",
+            messageLabel: messageLabel,
+            messagePlaceholder: messagePlaceholder,
+            messageCaption: "Shown in the Privacy Source and Vorssaint recordings while their output is blurred.",
+            sharingBoundary: "Screen Recording permission lets Vorssaint read pixels; macOS does not let one app rewrite another app’s independent capture. Always select ‘Vorssaint Privacy Source’ instead of the original screen or window."
+        )
     }
 }
 
 extension PrivacyScreenFeatureStrings {
     static let enUS = PrivacyScreenFeatureStrings(
         title: "Privacy Share",
-        hubDescription: "Share a safe desktop mirror that can hide without blocking your work",
+        hubDescription: "Create a shareable source that can blur without blocking your work",
         enabled: "Enable Privacy Share shortcut",
-        caption: "Use the shortcut to open Privacy Share and switch its live desktop mirror between normal and heavily distorted.",
+        caption: "Select Vorssaint Privacy Source in the sharing app, then use the shortcut to blur or reveal only that output.",
         messageLabel: "Message",
         messagePlaceholder: "Screen hidden",
-        messageCaption: "Shown in the center of the Privacy Share window while its contents are distorted.",
-        sharingBoundary: "In your meeting app, share the Privacy Share window, not the original display. Your desktop remains visible and usable only to you."
+        messageCaption: "Shown in the Privacy Source and Vorssaint recordings while their output is blurred.",
+        sharingBoundary: "Screen Recording permission cannot rewrite another app’s independent capture. Share ‘Vorssaint Privacy Source’ instead of the original screen or window."
     )
     static let ptBR = PrivacyScreenFeatureStrings(
         title: "Tela de privacidade", hubDescription: "Oculta todas as telas atrás de uma mensagem segura durante o compartilhamento",

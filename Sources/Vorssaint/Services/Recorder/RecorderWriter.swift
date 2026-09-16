@@ -195,6 +195,35 @@ final class RecorderWriter {
         }
     }
 
+    /// Writes a concealed copy of the most recent frame at the instant privacy
+    /// is enabled. ScreenCaptureKit may emit no new frames while the desktop is
+    /// static; without this transition frame, the encoder would keep showing
+    /// the previous raw frame until capture changed or stopped.
+    func appendPrivacyTransition(at wallClockTime: CMTime,
+                                 transform: (CMSampleBuffer) -> CMSampleBuffer?) {
+        guard started, !failed, let lastVideoSample else { return }
+        let elapsed = pauseClock.elapsed(at: wallClockTime.seconds)
+        let transitionTime = CMTime(seconds: elapsed, preferredTimescale: 600_000_000)
+        guard transitionTime > lastVideoTime,
+              videoInput.isReadyForMoreMediaData,
+              let protected = transform(lastVideoSample),
+              let retimed = RecorderSampleTiming.retimed(protected, to: transitionTime)
+        else {
+            // SECURITY: never extend a raw cached frame beyond a concealment
+            // request if rendering the protected transition failed.
+            self.lastVideoSample = nil
+            return
+        }
+        if videoInput.append(retimed) {
+            videoFrameCount += 1
+            self.lastVideoSample = protected
+            lastVideoTime = transitionTime
+        } else {
+            failed = true
+            self.lastVideoSample = nil
+        }
+    }
+
     /// The encoder cannot switch between one PCM buffer and a buffer per
     /// channel mid-recording. Interleave captured audio without resampling
     /// or remixing it, keeping the device's timing and channel layout intact.
@@ -265,16 +294,16 @@ final class RecorderWriter {
             writer.cancelWriting()
             return false
         }
+        let end = CMTime(
+            seconds: pauseClock.elapsed(at: wallClockEnd.seconds),
+            preferredTimescale: 600_000_000)
         if let lastVideoSample {
-            let end = CMTime(
-                seconds: pauseClock.elapsed(at: wallClockEnd.seconds),
-                preferredTimescale: 600_000_000)
             if end > lastVideoTime, videoInput.isReadyForMoreMediaData,
                let tail = RecorderSampleTiming.retimed(lastVideoSample, to: end) {
                 videoInput.append(tail)
             }
-            writer.endSession(atSourceTime: end)
         }
+        writer.endSession(atSourceTime: end)
         lastVideoSample = nil
         videoInput.markAsFinished()
         systemAudioInput?.markAsFinished()

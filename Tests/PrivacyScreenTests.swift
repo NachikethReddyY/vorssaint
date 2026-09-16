@@ -36,6 +36,15 @@ enum PrivacyScreenTests {
         suite.expect(distortion.brightness >= 0.05,
                      "privacy distortion lifts dark source colors")
 
+        suite.expect(PrivacyScreenSupport.hotkeyAction(for: .idle) == .none,
+                     "privacy shortcut is a no-op without a prepared privacy source")
+        suite.expect(PrivacyScreenSupport.hotkeyAction(for: .sharing(isPrivate: false))
+                        == .setPrivate(true),
+                     "privacy shortcut hides an active shared mirror")
+        suite.expect(PrivacyScreenSupport.hotkeyAction(for: .sharing(isPrivate: true))
+                        == .setPrivate(false),
+                     "privacy shortcut reveals an active shared mirror")
+
         suite.expect(Defaults.registeredDefaults[DefaultsKey.privacyScreenShortcutEnabled] as? Bool == true,
                      "privacy shortcut starts enabled")
         suite.expect(Defaults.registeredDefaults[DefaultsKey.privacyScreenShortcut] as? String
@@ -64,5 +73,28 @@ enum PrivacyScreenTests {
         suite.expect(settingsSource?.contains("privacyScreen.openShareWindow()") == false
                         && settingsSource?.contains("privacyScreen.toggle()") == false,
                      "privacy Settings relies on the recorded shortcut instead of redundant action buttons")
+
+        let serviceSource = try? String(
+            contentsOfFile: "Sources/Vorssaint/Services/QuickTools/PrivacyScreenService.swift",
+            encoding: .utf8
+        )
+        suite.expect(serviceSource?.contains("makeKeyAndOrderFront") == false
+                        && serviceSource?.contains("NSApp.activate") == false,
+                     "privacy sharing never surfaces its audience-only window locally")
+        suite.expect(serviceSource?.contains("Vorssaint Privacy Source") == true,
+                     "privacy output has a stable name for third-party window pickers")
+        suite.expect(serviceSource?.contains("output.level = .normal") == true
+                        && serviceSource?.contains("output.orderBack(nil)") == true,
+                     "privacy output is picker-visible but stays behind local work")
+        suite.expect(serviceSource?.contains("pointPixelScale") == true,
+                     "privacy output requests native Retina capture dimensions")
+        suite.expect(serviceSource?.contains("requestSharingOfWindow") == false,
+                     "privacy output does not claim an unsupported automatic handoff")
+        suite.expect(serviceSource?.contains("allowedPickerModes = [.singleDisplay, .singleWindow]") == true,
+                     "privacy input supports both display and window sources")
+        suite.expect(serviceSource?.contains("excludedWindowIDs") == true,
+                     "privacy output is excluded from its own input picker")
+        suite.expect(serviceSource?.contains("guard Permissions.shared.screenRecording") == false,
+                     "privacy capture lets ScreenCaptureKit determine access instead of trusting stale state")
     }
 }

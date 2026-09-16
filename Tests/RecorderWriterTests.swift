@@ -6,6 +6,7 @@ import AVFoundation
 enum RecorderWriterTests {
     static func run(expect: @escaping (Bool, String) -> Void) {
         checkClock(expect: expect)
+        checkPrivacyRenderer(expect: expect)
         let finished = DispatchSemaphore(value: 0)
         Task.detached {
             do {
@@ -16,11 +17,41 @@ enum RecorderWriterTests {
                 try await check(expect: expect, delayedVideo: true, changingMicrophone: true)
                 try await check(expect: expect, changingMicrophone: true, microphoneChannels: 4)
                 try await check(expect: expect, changingSystemAudio: true)
+                try await checkStaticPrivacyTransition(expect: expect)
             }
             catch { expect(false, "recorder writer fixture failed: \(error)") }
             finished.signal()
         }
         finished.wait()
+    }
+
+    private static func checkPrivacyRenderer(expect: (Bool, String) -> Void) {
+        let state = RecorderPrivacyState()
+        expect(state.current() == .init(isActive: false,
+                                        message: PrivacyScreenSupport.defaultMessage,
+                                        generation: 0),
+               "recorder privacy starts inactive with the safe default message")
+        state.update(isActive: true, message: "Private work")
+        expect(state.current() == .init(isActive: true, message: "Private work", generation: 1),
+               "recorder capture and metadata share one synchronized privacy snapshot")
+
+        let source = patternedVideo(at: CMTime(value: 17, timescale: 30))
+        let output = RecorderPrivacyFrameRenderer().render(source, message: "Private work")
+        let image = output.flatMap(CMSampleBufferGetImageBuffer)
+        expect(image.map { CVPixelBufferGetWidth($0) == 320 && CVPixelBufferGetHeight($0) == 180 }
+                ?? false,
+               "privacy rendering preserves the recording's native dimensions")
+        expect(output.map { CMSampleBufferGetPresentationTimeStamp($0) }
+                == CMSampleBufferGetPresentationTimeStamp(source),
+               "privacy rendering preserves the source frame timestamp")
+        expect(image.map { buffer in
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            let count = CVPixelBufferGetDataSize(buffer)
+            return stride(from: 0, to: count, by: 97).contains { bytes[$0] != 0 }
+        } ?? false,
+        "privacy rendering produces an audience frame instead of a blank fallback")
     }
 
     private static func checkClock(expect: (Bool, String) -> Void) {
@@ -39,6 +70,52 @@ enum RecorderWriterTests {
         expect(clock.resume(at: 120) && clock.sampleTime(start: 121, duration: 0.01) == 11
             && clock.eventTime(121) == 11 && clock.elapsed(at: 121) == 11,
                "samples, events and elapsed display remove the same pause")
+    }
+
+    private static func checkStaticPrivacyTransition(expect: (Bool, String) -> Void) async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("recorder-privacy-transition-\(UUID()).mov")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let clock = RecorderPauseClock()
+        let origin = CMTime(value: 200, timescale: 1)
+        let writer = RecorderWriter(url: url, pixelSize: CGSize(width: 320, height: 180),
+            frameRate: 30, capturesSystemAudio: false, capturesMicrophone: false,
+            pauseClock: clock)!
+        precondition(writer.start())
+        writer.beginSession(at: origin)
+        writer.append(video(at: origin, size: CGSize(width: 320, height: 180)), kind: .video)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let renderer = RecorderPrivacyFrameRenderer()
+        writer.appendPrivacyTransition(at: origin + time(0.5)) { sample in
+            renderer.render(sample, message: "Private work")
+        }
+        let finished = await writer.finish(at: origin + time(1))
+        expect(finished && writer.videoFrameCount == 2,
+               "a static recording writes a protected transition frame before its final tail")
+        guard finished else { return }
+        let asset = AVURLAsset(url: url)
+        guard let track = try await asset.load(.tracks).first else {
+            expect(false, "the static privacy fixture contains a video track")
+            return
+        }
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        ])
+        reader.add(output)
+        precondition(reader.startReading())
+        var finalHasProtectedPixels = false
+        while let sample = output.copyNextSampleBuffer(),
+              let buffer = CMSampleBufferGetImageBuffer(sample) {
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            let count = CVPixelBufferGetDataSize(buffer)
+            finalHasProtectedPixels = stride(from: 0, to: count, by: 97)
+                .contains { bytes[$0] > 20 }
+            CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
+        }
+        expect(reader.status == .completed && finalHasProtectedPixels,
+               "privacy enabled over a static screen cannot finish on the cached raw frame")
     }
 
     private static func check(expect: (Bool, String) -> Void,
@@ -223,9 +300,11 @@ enum RecorderWriterTests {
         return result!
     }
 
-    private static func video(at time: CMTime) -> CMSampleBuffer {
+    private static func video(at time: CMTime,
+                              size: CGSize = CGSize(width: 64, height: 64)) -> CMSampleBuffer {
         var pixels: CVPixelBuffer?
-        precondition(CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, kCVPixelFormatType_32BGRA,
+        precondition(CVPixelBufferCreate(kCFAllocatorDefault, Int(size.width), Int(size.height),
+            kCVPixelFormatType_32BGRA,
             nil, &pixels) == kCVReturnSuccess)
         CVPixelBufferLockBaseAddress(pixels!, [])
         memset(CVPixelBufferGetBaseAddress(pixels!), 0, CVPixelBufferGetDataSize(pixels!))
@@ -237,6 +316,35 @@ enum RecorderWriterTests {
         var sample: CMSampleBuffer?
         precondition(CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixels!,
             formatDescription: format!, sampleTiming: &timing, sampleBufferOut: &sample) == noErr)
+        return sample!
+    }
+
+    private static func patternedVideo(at time: CMTime) -> CMSampleBuffer {
+        var pixels: CVPixelBuffer?
+        precondition(CVPixelBufferCreate(kCFAllocatorDefault, 320, 180,
+            kCVPixelFormatType_32BGRA, nil, &pixels) == kCVReturnSuccess)
+        CVPixelBufferLockBaseAddress(pixels!, [])
+        let base = CVPixelBufferGetBaseAddress(pixels!)!.assumingMemoryBound(to: UInt8.self)
+        let rowBytes = CVPixelBufferGetBytesPerRow(pixels!)
+        for y in 0..<180 {
+            for x in 0..<320 {
+                let offset = y * rowBytes + x * 4
+                base[offset] = UInt8((x * 3) % 255)
+                base[offset + 1] = UInt8((y * 5) % 255)
+                base[offset + 2] = UInt8(((x + y) * 7) % 255)
+                base[offset + 3] = 255
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pixels!, [])
+        var format: CMVideoFormatDescription?
+        precondition(CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+            imageBuffer: pixels!, formatDescriptionOut: &format) == noErr)
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 30),
+            presentationTimeStamp: time, decodeTimeStamp: .invalid)
+        var sample: CMSampleBuffer?
+        precondition(CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault,
+            imageBuffer: pixels!, formatDescription: format!, sampleTiming: &timing,
+            sampleBufferOut: &sample) == noErr)
         return sample!
     }
 }

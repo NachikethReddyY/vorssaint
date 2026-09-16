@@ -323,6 +323,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/KillProcess/KillProcessSupport.swift
         Sources/Vorssaint/Services/Recorder/RecorderSupport.swift
         Sources/Vorssaint/Services/Recorder/RecorderSampleTiming.swift
+        Sources/Vorssaint/Services/Recorder/RecorderPrivacyFrameRenderer.swift
         Sources/Vorssaint/Services/Recorder/RecorderWriter.swift
         Sources/Vorssaint/Services/Recorder/RecorderCaptureEngine.swift
         Sources/Vorssaint/Services/Recorder/RecorderComposition.swift
