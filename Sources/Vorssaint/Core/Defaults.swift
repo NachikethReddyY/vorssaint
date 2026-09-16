@@ -50,6 +50,8 @@ enum DefaultsKey {
     static let mousePointerCustomized = "mousePointerCustomized"
     static let mousePointerAcceleration = "mousePointerAcceleration" // 0...40 HID acceleration/tracking value
     static let mousePointerSpeed = "mousePointerSpeed" // 0...1 software pointer speed
+    static let mousePointerDeviceProfiles = "mousePointerDeviceProfiles" // JSON keyed by stable HID identity
+    static let mousePointerSelectedDeviceID = "mousePointerSelectedDeviceID" // settings-only selection
     static let smoothScrollResponse = "smoothScrollResponse" // 0...100, higher follows the wheel sooner
     static let mouseNavigationEnabled = "mouseNavigationEnabled" // side buttons trigger Back and Forward
     static let mouseButtonShortcutsEnabled = "mouseButtonShortcutsEnabled" // extra buttons press a key combination (issue #282)
@@ -948,6 +950,8 @@ enum Defaults {
         DefaultsKey.mousePointerCustomized: false,
         DefaultsKey.mousePointerAcceleration: MouseAccelerationSupport.defaultAcceleration,
         DefaultsKey.mousePointerSpeed: MouseAccelerationSupport.defaultSpeed,
+        DefaultsKey.mousePointerDeviceProfiles: "{}",
+        DefaultsKey.mousePointerSelectedDeviceID: "",
         DefaultsKey.smoothScrollResponse: SmoothScrollSupport.defaultResponse,
         DefaultsKey.mouseNavigationEnabled: false,
         DefaultsKey.mouseButtonShortcutsEnabled: false,

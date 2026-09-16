@@ -91,19 +91,50 @@ enum MouseAccelerationRecovery {
         )
     }
 
-    static func isMouse(_ service: IOHIDServiceClient) -> Bool {
+    static func isPointer(_ service: IOHIDServiceClient) -> Bool {
         let conformsToMouse = IOHIDServiceClientConformsTo(service,
                                                            UInt32(kHIDPage_GenericDesktop),
                                                            UInt32(kHIDUsage_GD_Mouse)) != 0
         let conformsToPointer = IOHIDServiceClientConformsTo(service,
                                                              UInt32(kHIDPage_GenericDesktop),
                                                              UInt32(kHIDUsage_GD_Pointer)) != 0
-        guard conformsToMouse || conformsToPointer else {
+        return conformsToMouse || conformsToPointer
+    }
+
+    static func isTrackpad(_ service: IOHIDServiceClient) -> Bool {
+        guard isPointer(service) else { return false }
+        let vendorID = numberProperty("VendorID", of: service)
+        let productID = numberProperty("ProductID", of: service)
+        let appleVendors: Set<Int64> = [0x004C, 0x05AC]
+        let magicMouseProducts: Set<Int64> = [0x0269, 0x030D]
+        if let vendorID, let productID,
+           appleVendors.contains(vendorID), magicMouseProducts.contains(productID) {
             return false
         }
-        let accelerationType = stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,
-                                              of: service)
-        return accelerationType != MouseAccelerationSupport.trackpadAccelerationType
+        if IOHIDServiceClientConformsTo(service,
+                                        UInt32(kHIDPage_Digitizer),
+                                        UInt32(kHIDUsage_Dig_TouchPad)) != 0 {
+            return true
+        }
+        return stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,
+                              of: service) == MouseAccelerationSupport.trackpadAccelerationType
+    }
+
+    static func descriptor(of service: IOHIDServiceClient) -> MousePointerDeviceDescriptor? {
+        guard let registryID = registryID(of: service),
+              let identity = identity(of: service),
+              let preferenceKey = identity.preferenceKey else { return nil }
+        let name = stringProperty("Product", of: service)
+            ?? stringProperty("ProductName", of: service)
+            ?? (isTrackpad(service) ? "Trackpad" : "Mouse")
+        return MousePointerDeviceDescriptor(
+            id: preferenceKey,
+            registryID: registryID,
+            preferenceKey: preferenceKey,
+            name: name,
+            transport: identity.transport,
+            kind: isTrackpad(service) ? .trackpad : .mouse
+        )
     }
 
     static func captureEntry(for service: IOHIDServiceClient,
@@ -191,7 +222,8 @@ enum MouseAccelerationRecovery {
         if let key = stringProperty(MouseAccelerationSupport.pointerAccelerationTypeKey,
                                     of: service),
            key == MouseAccelerationSupport.pointerAccelerationKey
-            || key == MouseAccelerationSupport.mouseAccelerationKey {
+            || key == MouseAccelerationSupport.mouseAccelerationKey
+            || key == MouseAccelerationSupport.trackpadAccelerationKey {
             return key
         }
         if storedValue(for: MouseAccelerationSupport.pointerAccelerationKey, on: service) != nil {
@@ -211,7 +243,7 @@ enum MouseAccelerationRecovery {
         }
         guard entry.identity.canMatchAcrossRegistryIDs else { return nil }
         let matches = services.filter { service in
-            guard isMouse(service),
+            guard isPointer(service),
                   let registryID = registryID(of: service),
                   !reservedRegistryIDs.contains(registryID),
                   let liveIdentity = identity(of: service) else { return false }
@@ -247,13 +279,13 @@ enum MouseAccelerationRecovery {
         return value.rawValue as CFNumber
     }
 
-    private static func numberProperty(_ key: String,
-                                       of service: IOHIDServiceClient) -> Int64? {
+    static func numberProperty(_ key: String,
+                               of service: IOHIDServiceClient) -> Int64? {
         (IOHIDServiceClientCopyProperty(service, key as CFString) as? NSNumber)?.int64Value
     }
 
-    private static func stringProperty(_ key: String,
-                                       of service: IOHIDServiceClient) -> String? {
+    static func stringProperty(_ key: String,
+                               of service: IOHIDServiceClient) -> String? {
         guard let value = IOHIDServiceClientCopyProperty(service, key as CFString) else {
             return nil
         }

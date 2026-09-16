@@ -29,6 +29,32 @@ struct MouseAccelerationDeviceIdentity: Codable, Equatable {
             || serialNumber != nil
             || ((vendorID ?? 0) > 0 && (productID ?? 0) > 0 && (locationID ?? 0) > 0)
     }
+
+    /// Stable preference identity. Runtime registry IDs are intentionally not
+    /// persisted because IOKit can assign a different one after reconnecting.
+    var preferenceKey: String? {
+        let vendor = vendorID ?? 0
+        let product = productID ?? 0
+        if let serial = Self.normalizedIdentifier(serialNumber) {
+            return "serial|\(vendor)|\(product)|\(serial)"
+        }
+        if let physical = Self.normalizedIdentifier(physicalUniqueID) {
+            return "physical|\(vendor)|\(product)|\(physical)"
+        }
+        if vendor > 0, product > 0, let locationID, locationID > 0 {
+            return "location|\(vendor)|\(product)|\(locationID)|\(transport ?? "")"
+        }
+        return nil
+    }
+
+    private static func normalizedIdentifier(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.uppercased().filter { $0.isLetter || $0.isNumber }
+        guard !normalized.isEmpty,
+              !normalized.allSatisfy({ $0 == "0" }),
+              !normalized.allSatisfy({ $0 == "F" }) else { return nil }
+        return normalized
+    }
 }
 
 struct MouseAccelerationStoredValue: Codable, Equatable {
@@ -40,6 +66,76 @@ struct MousePointerPreferences: Equatable {
     let disablesAcceleration: Bool
     let acceleration: Double
     let speed: Double
+}
+
+struct MousePointerProfile: Codable, Equatable {
+    var isEnabled: Bool
+    var disablesAcceleration: Bool
+    var acceleration: Double
+    var speed: Double
+
+    static let disabled = MousePointerProfile(
+        isEnabled: false,
+        disablesAcceleration: false,
+        acceleration: MouseAccelerationSupport.defaultAcceleration,
+        speed: MouseAccelerationSupport.defaultSpeed
+    )
+
+    var sanitized: MousePointerProfile {
+        MousePointerProfile(
+            isEnabled: isEnabled,
+            disablesAcceleration: disablesAcceleration,
+            acceleration: MouseAccelerationSupport.sanitizedAcceleration(acceleration),
+            speed: MouseAccelerationSupport.sanitizedSpeed(speed)
+        )
+    }
+
+    var preferences: MousePointerPreferences {
+        let value = sanitized
+        return MousePointerPreferences(
+            disablesAcceleration: value.disablesAcceleration,
+            acceleration: value.acceleration,
+            speed: value.speed
+        )
+    }
+}
+
+enum MousePointerProfileStore {
+    static func decode(_ value: String) -> [String: MousePointerProfile] {
+        guard let data = value.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: MousePointerProfile].self,
+                                                      from: data) else { return [:] }
+        return decoded.reduce(into: [:]) { profiles, pair in
+            guard !pair.key.isEmpty else { return }
+            profiles[pair.key] = pair.value.sanitized
+        }
+    }
+
+    static func encode(_ profiles: [String: MousePointerProfile]) -> String {
+        let sanitized = profiles.reduce(into: [String: MousePointerProfile]()) { result, pair in
+            guard !pair.key.isEmpty else { return }
+            result[pair.key] = pair.value.sanitized
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(sanitized),
+              let value = String(data: data, encoding: .utf8) else { return "{}" }
+        return value
+    }
+}
+
+enum MousePointerDeviceKind: String, Codable {
+    case mouse
+    case trackpad
+}
+
+struct MousePointerDeviceDescriptor: Identifiable, Equatable {
+    let id: String
+    let registryID: UInt64
+    let preferenceKey: String
+    let name: String
+    let transport: String?
+    let kind: MousePointerDeviceKind
 }
 
 struct MouseAccelerationRecoveryEntry: Codable, Equatable {
@@ -129,6 +225,7 @@ enum MouseAccelerationSupport {
     static let pointerAccelerationTypeKey = "HIDPointerAccelerationType"
     static let pointerAccelerationKey = "HIDPointerAcceleration"
     static let mouseAccelerationKey = "HIDMouseAcceleration"
+    static let trackpadAccelerationKey = "HIDTrackpadAcceleration"
     static let pointerResolutionKey = "HIDPointerResolution"
     static let trackpadAccelerationType = "HIDTrackpadAcceleration"
 
@@ -146,7 +243,8 @@ enum MouseAccelerationSupport {
 
     static func isRestorableKey(_ key: String) -> Bool {
         key == linearScalingKey || key == pointerAccelerationKey
-            || key == mouseAccelerationKey || key == pointerResolutionKey
+            || key == mouseAccelerationKey || key == trackpadAccelerationKey
+            || key == pointerResolutionKey
     }
 
     static func sanitizedAcceleration(_ value: Double) -> Double {

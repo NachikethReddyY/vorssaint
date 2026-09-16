@@ -136,6 +136,9 @@ enum SettingsBackupSupport {
         DefaultsKey.systemShortcutsSuppressed,
         // DDC capability belongs to one physical monitor on one Mac port.
         DefaultsKey.brightnessDDCWriteOnlyPaths,
+        // Hardware identities and the last selected row belong to this Mac.
+        DefaultsKey.mousePointerDeviceProfiles,
+        DefaultsKey.mousePointerSelectedDeviceID,
     ]
 
     /// The file's content: an envelope with the format version, the app

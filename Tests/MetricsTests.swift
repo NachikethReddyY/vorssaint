@@ -15098,6 +15098,20 @@ struct MetricsTests {
                "resuming creates a fresh retry window without reviving cancelled callbacks")
         expect(mouseIdentity.canMatchAcrossRegistryIDs,
                "a stable physical identity can recover after a device receives a new registry id")
+        expect(mouseIdentity.preferenceKey
+                == "serial|1|2|SERIAL",
+               "a normalized serial number is the strongest persisted pointer-device identity")
+        let locationOnlyMouseIdentity = MouseAccelerationDeviceIdentity(
+            vendorID: 1,
+            productID: 2,
+            locationID: 3,
+            transport: "USB",
+            physicalUniqueID: nil,
+            serialNumber: nil
+        )
+        expect(locationOnlyMouseIdentity.preferenceKey
+                == "location|1|2|3|USB",
+               "a device without a serial keeps an independent port-scoped pointer profile")
         let anonymousMouseIdentity = MouseAccelerationDeviceIdentity(
             vendorID: nil,
             productID: nil,
@@ -15108,8 +15122,33 @@ struct MetricsTests {
         )
         expect(!anonymousMouseIdentity.canMatchAcrossRegistryIDs,
                "an anonymous device can never inherit another registry id's saved value")
+        expect(anonymousMouseIdentity.preferenceKey == nil,
+               "an anonymous pointer cannot receive a persisted per-device profile")
+        let pointerMouseProfile = MousePointerProfile(
+            isEnabled: true,
+            disablesAcceleration: false,
+            acceleration: 1.25,
+            speed: 0.3
+        )
+        let trackpadProfile = MousePointerProfile(
+            isEnabled: true,
+            disablesAcceleration: true,
+            acceleration: 2,
+            speed: 0.8
+        )
+        let encodedPointerProfiles = MousePointerProfileStore.encode([
+            "serial|1|2|SERIAL": pointerMouseProfile,
+            "location|5|6|7|SPI": trackpadProfile,
+        ])
+        expect(MousePointerProfileStore.decode(encodedPointerProfiles) == [
+            "serial|1|2|SERIAL": pointerMouseProfile,
+            "location|5|6|7|SPI": trackpadProfile,
+        ], "mouse and trackpad settings persist independently by device identity")
+        expect(MousePointerProfileStore.decode("not json").isEmpty,
+               "damaged per-device pointer settings fail closed")
         expect(MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.linearScalingKey)
                 && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.mouseAccelerationKey)
+                && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.trackpadAccelerationKey)
                 && MouseAccelerationSupport.isRestorableKey(MouseAccelerationSupport.pointerResolutionKey)
                 && !MouseAccelerationSupport.isRestorableKey("UserKeyMapping"),
                "mouse pointer recovery accepts only its own HID properties")
@@ -20478,9 +20517,9 @@ struct MetricsTests {
         let settingsCode = mouseSettingsViewLines.filter(isCodeLine).joined()
             .filter { !$0.isWhitespace }
         expect(!settingsShortcutProperty.isEmpty && !settingsSpacesProperty.isEmpty
-                && settingsCode.contains("(\(settingsShortcutProperty)||\(settingsSpacesProperty))"
-                    + "&&AppFeature.mouseButtonShortcuts.isAvailable"),
-               "the Mouse permission section treats either mouse-button switch as engaged")
+                && settingsCode.contains("privatevaraccessibilityNoteVisible:Bool{"
+                    + "!permissions.accessibility}"),
+               "Mouse & Trackpad keeps its Accessibility action visible at the top until granted")
 
         let panelShortcutProperty = appStorageProperty(shortcutKey, in: menuPanelLines) ?? ""
         let panelSpacesProperty = appStorageProperty(spacesKey, in: menuPanelLines) ?? ""
@@ -26112,11 +26151,18 @@ struct MetricsTests {
         let mouseSettingsSource = (try? String(
             contentsOfFile: "Sources/Vorssaint/UI/Settings/SettingsView.swift",
             encoding: .utf8)) ?? ""
-        expect(mouseSettingsSource.contains("DefaultsKey.mousePointerAcceleration")
-                && mouseSettingsSource.contains("DefaultsKey.mousePointerSpeed")
-                && mouseSettingsSource.contains("MouseAccelerationService.shared.revertToSystemDefaults()")
+        let permissionSection = mouseSettingsSource.range(
+            of: "if accessibilityNoteVisible {\n                Section(l10n.s.permissionRequired)")?.lowerBound
+        let scrollingSection = mouseSettingsSource.range(
+            of: "if AppFeature.scrollInverter.isAvailable")?.lowerBound
+        expect(permissionSection != nil && scrollingSection != nil
+                && permissionSection! < scrollingSection!,
+               "Mouse & Trackpad places its required Accessibility action before feature controls")
+        expect(mouseSettingsSource.contains("mousePointerService.connectedDevices")
+                && mouseSettingsSource.contains("mousePointerService.updateProfile")
+                && mouseSettingsSource.contains("mousePointerService.revertToSystemDefaults(for:")
                 && mouseSettingsSource.contains("mousePointerText.dpiNote"),
-               "Mouse & Trackpad exposes truthful native pointer controls and a system-default restore")
+               "Mouse & Trackpad exposes independent connected-device controls and a per-device reset")
         expect(AppLanguage.allCases.allSatisfy {
             let pointer = FeatureStrings.mousePointer($0)
             return !pointer.section.isEmpty && !pointer.customize.isEmpty
